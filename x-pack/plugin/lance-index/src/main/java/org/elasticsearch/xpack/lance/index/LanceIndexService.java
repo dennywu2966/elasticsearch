@@ -18,7 +18,6 @@ import org.elasticsearch.common.util.concurrent.EsExecutors;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.threadpool.Scheduler;
 import org.elasticsearch.threadpool.ThreadPool;
-import org.elasticsearch.xpack.lance.mapper.LanceVectorFieldMapper;
 
 import java.io.IOException;
 import java.util.Map;
@@ -202,7 +201,7 @@ public class LanceIndexService extends AbstractLifecycleComponent {
                 // Trigger a search with dummy vector to warm up the index
                 float[] dummyVector = new float[state.dataset.getVectorDimension(state.vectorColumn)];
                 state.dataset.search(state.vectorColumn, dummyVector, 1, 1, 1,
-                    LanceVectorFieldMapper.LanceSimilarity.L2, null);
+                    LanceDataset.LanceSimilarity.L2, null);
                 logger.info("Preloaded Lance index [{}]", state.indexName);
             } catch (Exception e) {
                 logger.warn("Failed to preload Lance index [{}]", state.indexName, e);

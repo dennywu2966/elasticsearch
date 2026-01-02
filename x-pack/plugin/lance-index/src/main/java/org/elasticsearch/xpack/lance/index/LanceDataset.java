@@ -8,9 +8,6 @@
 package org.elasticsearch.xpack.lance.index;
 
 import org.apache.lucene.util.Bits;
-import org.elasticsearch.xpack.lance.mapper.LanceVectorFieldMapper.LanceIndexType;
-import org.elasticsearch.xpack.lance.mapper.LanceVectorFieldMapper.LanceSimilarity;
-import org.elasticsearch.xpack.lance.mapper.LanceVectorQuery.LanceSearchResult;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -332,6 +329,43 @@ public class LanceDataset implements Closeable {
             }
         }
         DATASET_CACHE.clear();
+    }
+
+    /**
+     * Similarity metrics for Lance vector search.
+     */
+    public enum LanceSimilarity {
+        L2,
+        COSINE,
+        DOT
+    }
+
+    /**
+     * Supported Lance index types.
+     */
+    public enum LanceIndexType {
+        IVF_PQ,       // Inverted File with Product Quantization
+        IVF_HNSW_PQ,  // IVF + HNSW + Product Quantization
+        IVF_HNSW_SQ,  // IVF + HNSW + Scalar Quantization
+        FLAT,         // Brute force flat index
+        HNSW          // Hierarchical Navigable Small World
+    }
+
+    /**
+     * Search result from Lance vector search.
+     */
+    public static class LanceSearchResult {
+        public final int[] docIds;
+        public final float[] scores;
+
+        public LanceSearchResult(int[] docIds, float[] scores) {
+            this.docIds = docIds;
+            this.scores = scores;
+        }
+
+        public boolean isEmpty() {
+            return docIds == null || docIds.length == 0;
+        }
     }
 
     /**

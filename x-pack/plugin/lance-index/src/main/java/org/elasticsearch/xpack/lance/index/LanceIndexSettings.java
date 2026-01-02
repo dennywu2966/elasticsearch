@@ -19,6 +19,18 @@ public final class LanceIndexSettings {
     private LanceIndexSettings() {}
 
     /**
+     * Enable Lance backend for dense_vector fields in this index.
+     * When enabled, vector data will be stored and searched using Lance format
+     * instead of Lucene's native HNSW.
+     */
+    public static final Setting<Boolean> LANCE_ENABLED = Setting.boolSetting(
+        "index.lance.enabled",
+        false,
+        Setting.Property.IndexScope,
+        Setting.Property.Final
+    );
+
+    /**
      * The path to the Lance index directory on disk.
      * This can be a local path or a URI (s3://, gs://, az://).
      */

@@ -1,0 +1,41 @@
+/*
+ * Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
+ * or more contributor license agreements. Licensed under the Elastic License
+ * 2.0; you may not use this file except in compliance with the Elastic License
+ * 2.0.
+ */
+
+apply plugin: 'elasticsearch.internal-es-plugin'
+apply plugin: 'elasticsearch.internal-cluster-test'
+
+esplugin {
+  name = 'lance-index'
+  description = 'Lance vector index support for Elasticsearch, enabling import and management of Lance format vector indices.'
+  classname = 'org.elasticsearch.xpack.lance.LanceIndexPlugin'
+  extendedPlugins = ['x-pack-core']
+}
+
+dependencies {
+  compileOnly project(path: xpackModule('core'))
+
+  // Lance Java bindings (JNI)
+  implementation 'io.lancedb:lance-jni:0.23.1'
+  implementation 'org.apache.arrow:arrow-vector:17.0.0'
+  implementation 'org.apache.arrow:arrow-memory-core:17.0.0'
+  implementation 'org.apache.arrow:arrow-memory-unsafe:17.0.0'
+
+  testImplementation(testArtifact(project(xpackModule('core'))))
+  testImplementation(testArtifact(project(':server')))
+}
+
+tasks.named("thirdPartyAudit").configure {
+  ignoreMissingClasses(
+    // Arrow dependencies
+    'io.netty.buffer.ArrowBuf',
+    'io.netty.buffer.PooledByteBufAllocatorL',
+    'io.netty.util.internal.PlatformDependent',
+    // Lance JNI native dependencies
+    'com.lancedb.lance.ipc.*',
+    'com.lancedb.lance.ffi.*'
+  )
+}

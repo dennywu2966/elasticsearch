@@ -1,0 +1,46 @@
+Parallel Configuration Cache is an incubating feature.
+> Task :build-conventions:compileJava UP-TO-DATE
+> Task :build-conventions:pluginDescriptors UP-TO-DATE
+> Task :build-conventions:processResources UP-TO-DATE
+> Task :build-conventions:classes UP-TO-DATE
+> Task :build-conventions:jar UP-TO-DATE
+> Task :build-tools:reaper:compileJava UP-TO-DATE
+> Task :build-tools:reaper:processResources NO-SOURCE
+> Task :build-tools:reaper:classes UP-TO-DATE
+> Task :build-tools:reaper:jar UP-TO-DATE
+> Task :build-tools-internal:extractPluginRequests UP-TO-DATE
+> Task :build-tools-internal:generatePluginAdapters UP-TO-DATE
+> Task :build-tools-internal:pluginDescriptors UP-TO-DATE
+> Task :build-tools-internal:processResources UP-TO-DATE
+> Task :build-tools:compileJava UP-TO-DATE
+> Task :build-tools:compileGroovy NO-SOURCE
+> Task :build-tools:generateVersionProperties UP-TO-DATE
+> Task :build-tools:pluginDescriptors UP-TO-DATE
+> Task :build-tools:processResources UP-TO-DATE
+> Task :build-tools:classes UP-TO-DATE
+> Task :build-tools:jar UP-TO-DATE
+> Task :build-tools-internal:compileJava UP-TO-DATE
+> Task :build-tools-internal:compileGroovy UP-TO-DATE
+> Task :build-tools-internal:compileGroovyPlugins UP-TO-DATE
+> Task :build-tools-internal:classes UP-TO-DATE
+> Task :build-tools-internal:jar UP-TO-DATE
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Could not determine the dependencies of task ':plugins:lance-vector:run'.
+> Could not resolve all dependencies for configuration ':plugins:lance-vector:es_distro_extracted_testclusters-plugins-lance-vector-runTask-0-9.4.0-SNAPSHOT'.
+   > Could not find org.elasticsearch.distribution.integ-test-zip:elasticsearch:9.4.0-SNAPSHOT.
+     Searched in the following locations:
+       - https://repo.maven.apache.org/maven2/org/elasticsearch/distribution/integ-test-zip/elasticsearch/9.4.0-SNAPSHOT/maven-metadata.xml
+       - https://repo.maven.apache.org/maven2/org/elasticsearch/distribution/integ-test-zip/elasticsearch/9.4.0-SNAPSHOT/elasticsearch-9.4.0-SNAPSHOT.pom
+     Required by:
+         project ':plugins:lance-vector'
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 15s
+19 actionable tasks: 19 up-to-date

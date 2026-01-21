@@ -1,0 +1,61 @@
+Parallel Configuration Cache is an incubating feature.
+> Task :build-conventions:compileJava UP-TO-DATE
+> Task :build-conventions:pluginDescriptors UP-TO-DATE
+> Task :build-conventions:processResources UP-TO-DATE
+> Task :build-conventions:classes UP-TO-DATE
+> Task :build-conventions:jar UP-TO-DATE
+> Task :build-tools:reaper:compileJava UP-TO-DATE
+> Task :build-tools:reaper:processResources NO-SOURCE
+> Task :build-tools:reaper:classes UP-TO-DATE
+> Task :build-tools:reaper:jar UP-TO-DATE
+> Task :build-tools-internal:extractPluginRequests UP-TO-DATE
+> Task :build-tools-internal:generatePluginAdapters UP-TO-DATE
+> Task :build-tools-internal:pluginDescriptors UP-TO-DATE
+> Task :build-tools-internal:processResources UP-TO-DATE
+> Task :build-tools:compileJava UP-TO-DATE
+> Task :build-tools:compileGroovy NO-SOURCE
+> Task :build-tools:generateVersionProperties UP-TO-DATE
+> Task :build-tools:pluginDescriptors UP-TO-DATE
+> Task :build-tools:processResources UP-TO-DATE
+> Task :build-tools:classes UP-TO-DATE
+> Task :build-tools:jar UP-TO-DATE
+> Task :build-tools-internal:compileJava UP-TO-DATE
+> Task :build-tools-internal:compileGroovy UP-TO-DATE
+> Task :build-tools-internal:compileGroovyPlugins UP-TO-DATE
+> Task :build-tools-internal:classes UP-TO-DATE
+> Task :build-tools-internal:jar UP-TO-DATE
+=======================================
+Elasticsearch Build Hamster says Hello!
+  Gradle Version        : 9.2.1
+  OS Info               : Linux 5.15.0-164-generic (amd64)
+  JDK Version           : 21.0.7+6-LTS (Eclipse Temurin)
+  JAVA_HOME             : /home/denny/projects/es-lance-claude/.gradle/jdks/jdk-21.0.7+6
+  Random Testing Seed   : 62387DBF2DF831BF
+  In FIPS 140 mode      : false
+=======================================
+> Task :libs:entitlement:bridge:compileJava UP-TO-DATE
+> Task :libs:logging:compileJava UP-TO-DATE
+> Task :libs:geo:compileJava UP-TO-DATE
+> Task :libs:core:compileJava UP-TO-DATE
+> Task :libs:grok:compileJava UP-TO-DATE
+> Task :libs:x-content:compileJava UP-TO-DATE
+> Task :libs:cli:compileJava UP-TO-DATE
+> Task :libs:entitlement:compileJava UP-TO-DATE
+> Task :libs:lz4:compileJava UP-TO-DATE
+> Task :libs:native:compileJava UP-TO-DATE
+> Task :libs:plugin-api:compileJava UP-TO-DATE
+> Task :libs:plugin-analysis-api:compileJava UP-TO-DATE
+> Task :libs:exponential-histogram:compileJava UP-TO-DATE
+> Task :libs:simdvec:compileJava UP-TO-DATE
+> Task :libs:cli:processResources NO-SOURCE
+> Task :libs:cli:classes UP-TO-DATE
+> Task :libs:tdigest:compileJava UP-TO-DATE
+> Task :libs:cli:jar UP-TO-DATE
+> Task :libs:core:processResources NO-SOURCE
+> Task :libs:core:classes UP-TO-DATE
+> Task :libs:core:jar UP-TO-DATE
+> Task :libs:entitlement:asm-provider:compileJava UP-TO-DATE
+> Task :libs:entitlement:asm-provider:processResources UP-TO-DATE
+> Task :libs:entitlement:asm-provider:classes UP-TO-DATE
+> Task :server:compileJava UP-TO-DATE
+> Task :libs:entitlement:processResources NO-SOURCE

@@ -26,6 +26,7 @@ import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.NestedObjectMapper;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.DenseVectorFieldType;
+import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.FilterHeuristic;
 import org.elasticsearch.index.query.AbstractQueryBuilder;
 import org.elasticsearch.index.query.BoolQueryBuilder;
 import org.elasticsearch.index.query.MatchNoneQueryBuilder;
@@ -528,12 +529,49 @@ public class KnnVectorQueryBuilder extends AbstractQueryBuilder<KnnVectorQueryBu
         if (fieldType == null) {
             return Queries.NO_DOCS_INSTANCE;
         }
-        if (fieldType instanceof DenseVectorFieldType == false) {
+        final KnnVectorQueryable knnQueryable;
+        if (fieldType instanceof DenseVectorFieldType denseVectorFieldType) {
+            knnQueryable = new KnnVectorQueryable() {
+                @Override
+                public Query createKnnQuery(
+                    VectorData queryVector,
+                    int k,
+                    int numCands,
+                    Float visitPercentage,
+                    Float oversample,
+                    Query filter,
+                    Float similarityThreshold,
+                    BitSetProducer parentFilter,
+                    FilterHeuristic heuristic,
+                    boolean hnswEarlyTermination
+                ) {
+                    return denseVectorFieldType.createKnnQuery(
+                        queryVector,
+                        k,
+                        numCands,
+                        visitPercentage,
+                        oversample,
+                        filter,
+                        similarityThreshold,
+                        parentFilter,
+                        heuristic,
+                        hnswEarlyTermination
+                    );
+                }
+
+                @Override
+                public MappedFieldType getMappedFieldType() {
+                    return denseVectorFieldType;
+                }
+            };
+        } else if (fieldType instanceof KnnVectorQueryable customQueryable) {
+            knnQueryable = customQueryable;
+        } else {
             throw new IllegalArgumentException(
-                "[" + NAME + "] queries are only supported on [" + DenseVectorFieldMapper.CONTENT_TYPE + "] fields"
+                "[" + NAME + "] queries are only supported on [" + DenseVectorFieldMapper.CONTENT_TYPE + "] or "
+                    + "fields implementing KnnVectorQueryable"
             );
         }
-        DenseVectorFieldType vectorFieldType = (DenseVectorFieldType) fieldType;
 
         List<Query> filtersInitial = doFiltersToQuery(context);
 
@@ -578,7 +616,10 @@ public class KnnVectorQueryBuilder extends AbstractQueryBuilder<KnnVectorQueryBu
         DenseVectorFieldMapper.FilterHeuristic heuristic = context.getIndexSettings().getHnswFilterHeuristic();
         boolean hnswEarlyTermination = context.getIndexSettings().getHnswEarlyTermination();
         Float oversample = rescoreVectorBuilder() == null ? null : rescoreVectorBuilder.oversample();
-        if (filterQuery != null && (vectorFieldType.getIndexOptions() == null || vectorFieldType.getIndexOptions().isFlat() == false)) {
+        if (filterQuery != null
+            && (knnQueryable.getMappedFieldType() instanceof DenseVectorFieldType == false
+                || ((DenseVectorFieldType) knnQueryable.getMappedFieldType()).getIndexOptions() == null
+                || ((DenseVectorFieldType) knnQueryable.getMappedFieldType()).getIndexOptions().isFlat() == false)) {
             // Force the filter to be cacheable because it will be eagerly transformed into a bitset.
             // Simple filters (e.g., term queries) are normally considered too cheap to cache by the
             // default strategy, but once materialized as a bitset on every execution they become
@@ -586,7 +627,7 @@ public class KnnVectorQueryBuilder extends AbstractQueryBuilder<KnnVectorQueryBu
             filterQuery = new CachingEnableFilterQuery(filterQuery);
         }
 
-        return vectorFieldType.createKnnQuery(
+        return knnQueryable.createKnnQuery(
             queryVector,
             k,
             adjustedNumCands,

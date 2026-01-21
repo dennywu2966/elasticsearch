@@ -77,3 +77,6 @@ server/src/main/resources/transport/definitions/manifest.txt
 
 # JEnv
 .java-version
+*.hprof
+gradle-debug.log
+build.log

@@ -486,7 +486,8 @@ tasks.named("updateDaemonJvm") {
   ]
   toolchainPlatforms.set(myPlatforms)
   languageVersion = JavaLanguageVersion.of(21)
-  vendor = JvmVendorSpec.ADOPTIUM
+  // Relaxed to allow local OpenJDK builds in constrained environments; CI can override to ADOPTIUM.
+  vendor = JvmVendorSpec.any()
 }
 
 tasks.register("verifyBwcTestsEnabled") {

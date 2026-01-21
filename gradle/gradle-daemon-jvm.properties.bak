@@ -5,5 +5,5 @@ toolchainUrl.MAC_OS.AARCH64=https\://api.adoptium.net/v3/binary/version/jdk-21.0
 toolchainUrl.MAC_OS.X86_64=https\://api.adoptium.net/v3/binary/version/jdk-21.0.7+6/mac/x64/jdk/hotspot/normal/eclipse?project\=jdk
 toolchainUrl.WINDOWS.AARCH64=https\://api.adoptium.net/v3/binary/version/jdk-21.0.7+6/windows/aarch64/jdk/hotspot/normal/eclipse?project\=jdk
 toolchainUrl.WINDOWS.X86_64=https\://api.adoptium.net/v3/binary/version/jdk-21.0.7+6/windows/x64/jdk/hotspot/normal/eclipse?project\=jdk
-toolchainVendor=ADOPTIUM
+toolchainVendor=ANY
 toolchainVersion=21

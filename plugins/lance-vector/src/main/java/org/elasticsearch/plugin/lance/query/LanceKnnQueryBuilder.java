@@ -13,15 +13,14 @@ import org.apache.lucene.search.Query;
 import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.query.AbstractQueryBuilder;
-import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.QueryValidationException;
 import org.elasticsearch.index.query.SearchExecutionContext;
 import org.elasticsearch.plugin.lance.mapper.LanceVectorFieldMapper.LanceVectorFieldType;
 import org.elasticsearch.search.vectors.VectorData;
 import org.elasticsearch.xcontent.ParseField;
+import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentParser;
 
 import java.io.IOException;
@@ -108,9 +107,7 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
     protected Query doToQuery(SearchExecutionContext context) throws IOException {
         MappedFieldType fieldType = context.getFieldType(fieldName);
         if (fieldType instanceof LanceVectorFieldType == false) {
-            throw new IllegalArgumentException(
-                "field [" + fieldName + "] is not a lance_vector field"
-            );
+            throw new IllegalArgumentException("field [" + fieldName + "] is not a lance_vector field");
         }
 
         LanceVectorFieldType lanceFieldType = (LanceVectorFieldType) fieldType;

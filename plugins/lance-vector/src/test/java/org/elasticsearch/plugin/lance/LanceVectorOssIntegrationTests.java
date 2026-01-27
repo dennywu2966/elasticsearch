@@ -9,6 +9,8 @@
 
 package org.elasticsearch.plugin.lance;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.core.PathUtils;
 import org.elasticsearch.plugin.lance.storage.LanceDatasetConfig;
@@ -19,9 +21,6 @@ import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.vectors.KnnSearchBuilder;
 import org.elasticsearch.test.ESSingleNodeTestCase;
 import org.elasticsearch.xcontent.XContentBuilder;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-import org.apache.lucene.util.SuppressForbidden;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -54,8 +53,7 @@ public class LanceVectorOssIntegrationTests extends ESSingleNodeTestCase {
 
     private static final Logger logger = LogManager.getLogger(LanceVectorOssIntegrationTests.class);
 
-    private static final String OSS_TEST_URI = System.getProperty("oss.test.uri",
-        System.getenv().getOrDefault("OSS_TEST_URI", ""));
+    private static final String OSS_TEST_URI = System.getProperty("oss.test.uri", System.getenv().getOrDefault("OSS_TEST_URI", ""));
 
     @Override
     protected Collection<Class<? extends Plugin>> getPlugins() {
@@ -91,8 +89,7 @@ public class LanceVectorOssIntegrationTests extends ESSingleNodeTestCase {
 
         // Skip test if dataset doesn't exist
         assumeTrue(
-            "Skipping - dataset not found at: " + datasetPath
-                + ". Create it with: python scripts/create_test_dataset.py " + datasetPath,
+            "Skipping - dataset not found at: " + datasetPath + ". Create it with: python scripts/create_test_dataset.py " + datasetPath,
             Files.exists(PathUtils.get(datasetPath))
         );
 
@@ -105,8 +102,7 @@ public class LanceVectorOssIntegrationTests extends ESSingleNodeTestCase {
             assertThat(dataset.size(), greaterThan(0L));
             assertThat(dataset.hasIndex(), is(true));
 
-            logger.info("Dataset opened: vectors={}, dims={}, indexed={}",
-                dataset.size(), dataset.dims(), dataset.hasIndex());
+            logger.info("Dataset opened: vectors={}, dims={}, indexed={}", dataset.size(), dataset.dims(), dataset.hasIndex());
 
             // Test vector search
             float[] queryVector = new float[128];
@@ -149,9 +145,7 @@ public class LanceVectorOssIntegrationTests extends ESSingleNodeTestCase {
         // Index metadata documents - match IDs in the Lance dataset (doc_0, doc_1, ..., doc_999)
         // The Lance dataset was created with underscore format: doc_{i}
         for (int i = 0; i < 1000; i++) {
-            prepareIndex("lance-test").setId("doc_" + i)
-                .setSource("category", randomFrom("tech", "science", "business"))
-                .get();
+            prepareIndex("lance-test").setId("doc_" + i).setSource("category", randomFrom("tech", "science", "business")).get();
         }
         indicesAdmin().prepareRefresh("lance-test").get();
 
@@ -162,10 +156,7 @@ public class LanceVectorOssIntegrationTests extends ESSingleNodeTestCase {
         }
 
         KnnSearchBuilder knn = new KnnSearchBuilder("embedding", queryVector, 5, 10, null, null, null);
-        SearchResponse response = client().prepareSearch("lance-test")
-            .setKnnSearch(List.of(knn))
-            .setSize(5)
-            .get();
+        SearchResponse response = client().prepareSearch("lance-test").setKnnSearch(List.of(knn)).setSize(5).get();
 
         try {
             assertThat(response.getHits().getHits().length, greaterThan(0));
@@ -208,8 +199,12 @@ public class LanceVectorOssIntegrationTests extends ESSingleNodeTestCase {
             assertThat(dataset.size(), greaterThan(0L));
             assertThat(dataset.uri(), equalTo(OSS_TEST_URI));
 
-            logger.info("Successfully opened OSS dataset: vectors={}, dims={}, indexed={}",
-                dataset.size(), dataset.dims(), dataset.hasIndex());
+            logger.info(
+                "Successfully opened OSS dataset: vectors={}, dims={}, indexed={}",
+                dataset.size(),
+                dataset.dims(),
+                dataset.hasIndex()
+            );
 
             // Test vector search on OSS dataset
             float[] queryVector = new float[128];
@@ -224,8 +219,7 @@ public class LanceVectorOssIntegrationTests extends ESSingleNodeTestCase {
             assertThat(candidates, notNullValue());
             assertThat(candidates.size(), greaterThan(0));
 
-            logger.info("OSS vector search completed in {}ms, returned {} candidates",
-                searchTime, candidates.size());
+            logger.info("OSS vector search completed in {}ms, returned {} candidates", searchTime, candidates.size());
 
             for (var candidate : candidates) {
                 logger.info("  Candidate: id={}, score={}", candidate.id(), candidate.score());
@@ -265,9 +259,7 @@ public class LanceVectorOssIntegrationTests extends ESSingleNodeTestCase {
 
         // Index metadata documents
         for (int i = 0; i < 100; i++) {
-            prepareIndex("oss-lance-test").setId("doc" + i)
-                .setSource("category", randomFrom("tech", "science", "business"))
-                .get();
+            prepareIndex("oss-lance-test").setId("doc" + i).setSource("category", randomFrom("tech", "science", "business")).get();
         }
         indicesAdmin().prepareRefresh("oss-lance-test").get();
 
@@ -278,10 +270,7 @@ public class LanceVectorOssIntegrationTests extends ESSingleNodeTestCase {
         }
 
         KnnSearchBuilder knn = new KnnSearchBuilder("embedding", queryVector, 10, 20, null, null, null);
-        SearchResponse response = client().prepareSearch("oss-lance-test")
-            .setKnnSearch(List.of(knn))
-            .setSize(10)
-            .get();
+        SearchResponse response = client().prepareSearch("oss-lance-test").setKnnSearch(List.of(knn)).setSize(10).get();
 
         try {
             assertThat(response.getHits().getHits().length, greaterThan(0));
@@ -290,8 +279,7 @@ public class LanceVectorOssIntegrationTests extends ESSingleNodeTestCase {
 
             for (SearchHit hit : response.getHits()) {
                 assertThat(hit.getScore(), greaterThan(0.0f));
-                logger.info("  Result: id={}, score={}, source={}",
-                    hit.getId(), hit.getScore(), hit.getSourceAsMap());
+                logger.info("  Result: id={}, score={}, source={}", hit.getId(), hit.getScore(), hit.getSourceAsMap());
             }
         } finally {
             response.decRef();

@@ -96,19 +96,7 @@ public class LanceKnnQueryTests extends ESTestCase {
 
     public void testToStringContainsFieldName() {
         float[] vector = { 1.0f, 2.0f, 3.0f };
-        LanceKnnQuery query = new LanceKnnQuery(
-            "myField",
-            "file:///path/to/data",
-            vector,
-            10,
-            100,
-            "cosine",
-            null,
-            3,
-            null,
-            null,
-            null
-        );
+        LanceKnnQuery query = new LanceKnnQuery("myField", "file:///path/to/data", vector, 10, 100, "cosine", null, 3, null, null, null);
 
         String str = query.toString("ignored");
         assertThat(str, containsString("LanceKnnQuery"));

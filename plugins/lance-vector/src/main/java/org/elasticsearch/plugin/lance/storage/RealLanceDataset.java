@@ -28,8 +28,8 @@ import org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.lucene.util.SuppressForbidden;
-import org.elasticsearch.plugin.lance.profile.LanceTimingContext;
 import org.elasticsearch.plugin.lance.profile.LanceTimer;
+import org.elasticsearch.plugin.lance.profile.LanceTimingContext;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -332,11 +332,7 @@ public class RealLanceDataset implements LanceDataset {
         // When using .nearest(), Lance automatically returns all requested columns plus distance metrics
         // We specify the columns we want, and Lance adds the distance column automatically
         // Note: The distance column name depends on the Lance version - try both "distance" and "_distance"
-        ScanOptions scanOptions = new ScanOptions.Builder()
-            .columns(List.of(idColumn))
-            .nearest(query)
-            .limit(numCandidates)
-            .build();
+        ScanOptions scanOptions = new ScanOptions.Builder().columns(List.of(idColumn)).nearest(query).limit(numCandidates).build();
 
         // Execute the search - preallocate list to avoid resizing
         List<Candidate> candidates = new ArrayList<>(numCandidates);
@@ -391,14 +387,18 @@ public class RealLanceDataset implements LanceDataset {
             distVector = (Float4Vector) batch.getVector("distance");
         }
 
-        logger.info("extractCandidates: batch.getRowCount()={}, distVector={}, schema={}",
-            batch.getRowCount(), distVector != null ? "present" : "NULL", batch.getSchema().toJson());
+        logger.info(
+            "extractCandidates: batch.getRowCount()={}, distVector={}, schema={}",
+            batch.getRowCount(),
+            distVector != null ? "present" : "NULL",
+            batch.getSchema().toJson()
+        );
 
         if (distVector == null) {
             logger.error(
-                "CRITICAL: Distance column not found in Lance scan results! " +
-                "Tried '_distance' and 'distance'. Available columns: {}. " +
-                "This will result in 0 scores for all results.",
+                "CRITICAL: Distance column not found in Lance scan results! "
+                    + "Tried '_distance' and 'distance'. Available columns: {}. "
+                    + "This will result in 0 scores for all results.",
                 batch.getSchema().getFields().stream().map(f -> f.getName()).toList()
             );
             // Continue with null distVector - will default to distance=0

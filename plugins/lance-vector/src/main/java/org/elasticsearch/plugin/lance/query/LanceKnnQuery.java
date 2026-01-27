@@ -26,13 +26,13 @@ import org.apache.lucene.search.Weight;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.index.mapper.IdFieldMapper;
 import org.elasticsearch.index.mapper.Uid;
-import org.elasticsearch.plugin.lance.profile.LanceTimingContext;
 import org.elasticsearch.plugin.lance.profile.LanceTimer;
+import org.elasticsearch.plugin.lance.profile.LanceTimingContext;
 import org.elasticsearch.plugin.lance.storage.LanceDataset;
 import org.elasticsearch.plugin.lance.storage.LanceDatasetConfig;
 import org.elasticsearch.plugin.lance.storage.LanceDatasetRegistry;
-import org.elasticsearch.search.vectors.QueryProfilerProvider;
 import org.elasticsearch.search.profile.query.QueryProfiler;
+import org.elasticsearch.search.vectors.QueryProfilerProvider;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -64,9 +64,6 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
     private final String ossAccessKeyId;
     private final String ossAccessKeySecret;
 
-    // Thread-local timing context for profiling
-    private final ThreadLocal<LanceTimingContext> timingContext = new ThreadLocal<>();
-
     public LanceKnnQuery(
         String fieldName,
         String storageUri,
@@ -96,106 +93,117 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
     @Override
     public Weight createWeight(IndexSearcher searcher, ScoreMode scoreMode, float boost) throws IOException {
         // Initialize timing context for this query
-        LanceTimingContext context = LanceTimingContext.getOrCreate();
-        timingContext.set(context);
-        // Activate timing collection - this enables LanceTimer to record timings
-        context.activate();
+        LanceTimingContext context = null;
+        try {
+            context = LanceTimingContext.getOrCreate();
+            // Activate timing collection - this enables LanceTimer to record timings
+            context.activate();
 
-        // Use unified registry that automatically selects RealLanceDataset for .lance files
-        // and FakeLanceDataset for JSON test files
-        // For OSS URIs, include OSS configuration
-        LanceDatasetConfig config;
-        if (storageUri.startsWith("oss://") && ossEndpoint != null) {
-            config = new LanceDatasetConfig("_id", "vector", dims, ossEndpoint, ossAccessKeyId, ossAccessKeySecret);
-        } else {
-            config = new LanceDatasetConfig("_id", "vector", dims, null, null, null);
-        }
-
-        LanceDataset dataset;
-        List<LanceDataset.Candidate> candidates;
-        try (var timer = new LanceTimer(LanceTimingContext.LanceTimingStage.REGISTRY_CACHE_LOOKUP)) {
-            dataset = LanceDatasetRegistry.getOrLoad(storageUri, dims, config);
-            candidates = dataset.search(queryVector, numCandidates, similarity);
-        }
-
-        logger.debug(
-            "Lance KNN: dataset has {} dims, searched with numCandidates={}, got {} candidates",
-            dataset.dims(),
-            numCandidates,
-            candidates.size()
-        );
-        // Store filter query - we'll create the weight per-leaf to handle ES's DFS phase
-        // which may use a different IndexSearcher than the one passed here
-        final Query filterQuery = this.filter;
-        final float queryBoost = boost;
-        final int topK = k;
-        return new Weight(this) {
-        @Override
-        public Explanation explain(LeafReaderContext context, int doc) throws IOException {
-            ScorerSupplier supplier = scorerSupplier(context);
-            if (supplier == null) {
-                return Explanation.noMatch("no matching docs");
+            // Use unified registry that automatically selects RealLanceDataset for .lance files
+            // and FakeLanceDataset for JSON test files
+            // For OSS URIs, include OSS configuration
+            LanceDatasetConfig config;
+            if (storageUri.startsWith("oss://") && ossEndpoint != null) {
+                config = new LanceDatasetConfig("_id", "vector", dims, ossEndpoint, ossAccessKeyId, ossAccessKeySecret);
+            } else {
+                config = new LanceDatasetConfig("_id", "vector", dims, null, null, null);
             }
-            Scorer scorer = supplier.get(1);
-            int advanced = scorer.iterator().advance(doc);
-            if (advanced == doc) {
-                return Explanation.match(scorer.score(), "matched lance candidate");
-            }
-            return Explanation.noMatch("not in candidate set");
-        }
 
-        @Override
-        public ScorerSupplier scorerSupplier(LeafReaderContext context) throws IOException {
-            // Create filter weight using an IndexSearcher from the context's top-level reader
-            // This is necessary because ES's DFS phase may call scorerSupplier with a context
-            // from a different top-level reader than the searcher passed to createWeight
-            Weight filterWeight = null;
-            if (filterQuery != null) {
-                IndexSearcher contextSearcher = new IndexSearcher(context.parent);
-                filterWeight = filterQuery.createWeight(contextSearcher, ScoreMode.COMPLETE_NO_SCORES, 1f);
+            LanceDataset dataset;
+            List<LanceDataset.Candidate> candidates;
+            try (var timer = new LanceTimer(LanceTimingContext.LanceTimingStage.REGISTRY_CACHE_LOOKUP)) {
+                dataset = LanceDatasetRegistry.getOrLoad(storageUri, dims, config);
+                candidates = dataset.search(queryVector, numCandidates, similarity);
             }
-            Map<Integer, Float> docScores = buildDocScores(context, candidates, filterWeight, topK);
-            if (docScores.isEmpty()) {
-                return null;
-            }
-            List<Integer> docIds = new ArrayList<>(docScores.keySet());
-            Collections.sort(docIds);
 
-            return new ScorerSupplier() {
+            logger.debug(
+                "Lance KNN: dataset has {} dims, searched with numCandidates={}, got {} candidates",
+                dataset.dims(),
+                numCandidates,
+                candidates.size()
+            );
+            // Store filter query - we'll create the weight per-leaf to handle ES's DFS phase
+            // which may use a different IndexSearcher than the one passed here
+            final Query filterQuery = this.filter;
+            final float queryBoost = boost;
+            final int topK = k;
+            final LanceTimingContext capturedContext = context;  // Capture for cleanup
+
+            return new Weight(this) {
                 @Override
-                public Scorer get(long leadCost) throws IOException {
-                    DocIdSetIterator it = new DocIdSetIterator() {
-                        int idx = -1;
+                public Explanation explain(LeafReaderContext context, int doc) throws IOException {
+                    ScorerSupplier supplier = scorerSupplier(context);
+                    if (supplier == null) {
+                        return Explanation.noMatch("no matching docs");
+                    }
+                    Scorer scorer = supplier.get(1);
+                    int advanced = scorer.iterator().advance(doc);
+                    if (advanced == doc) {
+                        return Explanation.match(scorer.score(), "matched lance candidate");
+                    }
+                    return Explanation.noMatch("not in candidate set");
+                }
 
-                        @Override
-                        public int docID() {
-                            if (idx < 0) {
-                                return -1; // Not yet positioned
-                            } else if (idx >= docIds.size()) {
-                                return NO_MORE_DOCS;
-                            }
-                            return docIds.get(idx);
-                        }
+                @Override
+                public ScorerSupplier scorerSupplier(LeafReaderContext context) throws IOException {
+                    // Create filter weight using an IndexSearcher from the context's top-level reader
+                    // This is necessary because ES's DFS phase may call scorerSupplier with a context
+                    // from a different top-level reader than the searcher passed to createWeight
+                    Weight filterWeight = null;
+                    if (filterQuery != null) {
+                        IndexSearcher contextSearcher = new IndexSearcher(context.parent);
+                        filterWeight = filterQuery.createWeight(contextSearcher, ScoreMode.COMPLETE_NO_SCORES, 1f);
+                    }
+                    Map<Integer, Float> docScores = buildDocScores(context, candidates, filterWeight, topK);
+                    if (docScores.isEmpty()) {
+                        return null;
+                    }
+                    List<Integer> docIds = new ArrayList<>(docScores.keySet());
+                    Collections.sort(docIds);
 
+                    return new ScorerSupplier() {
                         @Override
-                        public int nextDoc() {
-                            idx++;
-                            if (idx >= docIds.size()) {
-                                return NO_MORE_DOCS;
-                            }
-                            return docIds.get(idx);
-                        }
+                        public Scorer get(long leadCost) throws IOException {
+                            DocIdSetIterator it = new DocIdSetIterator() {
+                                int idx = -1;
 
-                        @Override
-                        public int advance(int target) {
-                            while (idx + 1 < docIds.size() && docIds.get(idx + 1) < target) {
-                                idx++;
-                            }
-                            if (idx + 1 < docIds.size()) {
-                                idx++;
-                                return docIds.get(idx);
-                            }
-                            return NO_MORE_DOCS;
+                                @Override
+                                public int docID() {
+                                    if (idx < 0) {
+                                        return -1; // Not yet positioned
+                                    } else if (idx >= docIds.size()) {
+                                        return NO_MORE_DOCS;
+                                    }
+                                    return docIds.get(idx);
+                                }
+
+                                @Override
+                                public int nextDoc() {
+                                    idx++;
+                                    if (idx >= docIds.size()) {
+                                        return NO_MORE_DOCS;
+                                    }
+                                    return docIds.get(idx);
+                                }
+
+                                @Override
+                                public int advance(int target) {
+                                    while (idx + 1 < docIds.size() && docIds.get(idx + 1) < target) {
+                                        idx++;
+                                    }
+                                    if (idx + 1 < docIds.size()) {
+                                        idx++;
+                                        return docIds.get(idx);
+                                    }
+                                    return NO_MORE_DOCS;
+                                }
+
+                                @Override
+                                public long cost() {
+                                    return docIds.size();
+                                }
+                            };
+                            return new LanceScorer(it, docScores, queryBoost);
                         }
 
                         @Override
@@ -203,21 +211,20 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
                             return docIds.size();
                         }
                     };
-                    return new LanceScorer(it, docScores, queryBoost);
                 }
 
                 @Override
-                public long cost() {
-                    return docIds.size();
+                public boolean isCacheable(LeafReaderContext ctx) {
+                    return false;
                 }
             };
+        } finally {
+            // Clean up timing context to prevent ThreadLocal memory leak
+            if (context != null) {
+                context.deactivate();
+                context.clear();
+            }
         }
-
-        @Override
-        public boolean isCacheable(LeafReaderContext ctx) {
-            return false;
-        }
-    };
     }
 
     private static class LanceScorer extends Scorer {
@@ -351,7 +358,7 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
      * @return Map containing timing breakdown, or null if profiling is not active
      */
     private Map<String, Object> getTimingBreakdown() {
-        LanceTimingContext context = timingContext.get();
+        LanceTimingContext context = LanceTimingContext.getOrCreate();
         if (context != null && context.isActive()) {
             Map<String, Object> timing = context.toDebugMap();
             // Log the timing breakdown for debugging
@@ -375,18 +382,11 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
         Map<String, Object> timing = getTimingBreakdown();
         if (timing != null && timing.isEmpty() == false) {
             // Get the profile breakdown for this query and add Lance timing to debug info
-            org.elasticsearch.search.profile.query.QueryProfileBreakdown breakdown =
-                queryProfiler.getQueryBreakdown(this);
+            org.elasticsearch.search.profile.query.QueryProfileBreakdown breakdown = queryProfiler.getQueryBreakdown(this);
             if (breakdown != null) {
                 // Inject Lance timing into the debug map using the new API
                 breakdown.putAllDebugData(timing);
                 logger.debug("Lance kNN profile timing: {}", timing);
-            }
-            // Clean up: deactivate and clear the timing context after profiling
-            LanceTimingContext context = timingContext.get();
-            if (context != null) {
-                context.deactivate();
-                context.clear();
             }
         }
     }

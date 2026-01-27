@@ -40,8 +40,14 @@ public record LanceDatasetConfig(
     /**
      * Create config with OSS storage options.
      */
-    public static LanceDatasetConfig withOssConfig(String idColumn, String vectorColumn, int dims,
-                                                     String ossEndpoint, String ossAccessKeyId, String ossAccessKeySecret) {
+    public static LanceDatasetConfig withOssConfig(
+        String idColumn,
+        String vectorColumn,
+        int dims,
+        String ossEndpoint,
+        String ossAccessKeyId,
+        String ossAccessKeySecret
+    ) {
         return new LanceDatasetConfig(idColumn, vectorColumn, dims, ossEndpoint, ossAccessKeyId, ossAccessKeySecret);
     }
 

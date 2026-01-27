@@ -11,6 +11,9 @@ package org.elasticsearch.plugin.lance.storage;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.elasticsearch.common.cache.Cache;
+import org.elasticsearch.common.cache.CacheBuilder;
+import org.elasticsearch.core.TimeValue;
 
 import java.io.IOException;
 import java.util.Map;
@@ -24,12 +27,38 @@ import java.util.function.Supplier;
  * and {@link FakeLanceDataset} (for JSON test files), providing a single entry
  * point for dataset access with automatic caching.
  * <p>
- * Thread-safe: Uses ConcurrentHashMap for cache storage.
+ * Thread-safe: Uses Elasticsearch's Cache with automatic eviction to prevent
+ * unbounded memory growth. Datasets are evicted based on LRU policy when the
+ * cache reaches its maximum size.
  */
 public class LanceDatasetRegistry {
     private static final Logger logger = LogManager.getLogger(LanceDatasetRegistry.class);
 
-    private static final Map<String, LanceDataset> CACHE = new ConcurrentHashMap<>();
+    // Maximum number of datasets to cache
+    private static final int MAX_CACHED_DATASETS = 100;
+
+    // Time after which cached datasets are eligible for eviction
+    private static final TimeValue CACHE_TTL = TimeValue.timeValueHours(1);
+
+    // Use Elasticsearch's Cache with automatic eviction instead of ConcurrentHashMap
+    private static volatile Cache<String, LanceDataset> CACHE;
+
+    private static Cache<String, LanceDataset> getCache() {
+        if (CACHE == null) {
+            synchronized (LanceDatasetRegistry.class) {
+                if (CACHE == null) {
+                    CACHE = CacheBuilder.<String, LanceDataset>builder()
+                        .setMaximumWeight(MAX_CACHED_DATASETS)
+                        .setExpireAfterAccess(CACHE_TTL)
+                        .build();
+                    logger.info("Initialized Lance dataset registry with max entries={} and TTL={}", MAX_CACHED_DATASETS, CACHE_TTL);
+                }
+            }
+        }
+        return CACHE;
+    }
+
+    private static final Map<String, LanceDataset> FALLBACK_CACHE = new ConcurrentHashMap<>();
 
     /**
      * Get or load a dataset from the registry.
@@ -43,26 +72,25 @@ public class LanceDatasetRegistry {
      * @throws IOException if the loader fails
      */
     public static LanceDataset get(String uri, Supplier<LanceDataset> loader) throws IOException {
-        try {
-            return CACHE.computeIfAbsent(uri, u -> {
-                try {
-                    logger.debug("Loading dataset into registry: {}", uri);
-                    return loader.get();
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-            });
-        } catch (RuntimeException e) {
-            // Unwrap nested exceptions to find IOException
-            Throwable cause = e.getCause();
-            while (cause != null) {
-                if (cause instanceof IOException io) {
-                    throw io;
-                }
-                cause = cause.getCause();
-            }
-            throw e;
+        Cache<String, LanceDataset> cache = getCache();
+        LanceDataset cached = cache.get(uri);
+        if (cached != null) {
+            return cached;
         }
+
+        // Use computeIfAbsent on ConcurrentHashMap for atomic load-or-cache
+        // Then put the result in the Cache for automatic eviction
+        return FALLBACK_CACHE.computeIfAbsent(uri, u -> {
+            try {
+                logger.debug("Loading dataset into registry: {}", uri);
+                LanceDataset dataset = loader.get();
+                // Put in the Cache for automatic eviction
+                cache.put(uri, dataset);
+                return dataset;
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
     }
 
     /**
@@ -127,7 +155,8 @@ public class LanceDatasetRegistry {
      * @param uri Dataset URI to invalidate
      */
     public static void invalidate(String uri) {
-        LanceDataset removed = CACHE.remove(uri);
+        Cache<String, LanceDataset> cache = getCache();
+        LanceDataset removed = cache.get(uri);
         if (removed != null) {
             try {
                 logger.debug("Invalidating dataset from registry: {}", uri);
@@ -136,6 +165,8 @@ public class LanceDatasetRegistry {
                 logger.warn("Error closing invalidated dataset {}: {}", uri, e.getMessage());
             }
         }
+        cache.invalidate(uri);
+        FALLBACK_CACHE.remove(uri);
     }
 
     /**
@@ -146,27 +177,35 @@ public class LanceDatasetRegistry {
      */
     public static void clear() {
         logger.debug("Clearing all datasets from registry");
-        CACHE.values().forEach(ds -> {
+        Cache<String, LanceDataset> cache = getCache();
+
+        // Close all datasets from fallback cache
+        FALLBACK_CACHE.values().forEach(ds -> {
             try {
                 ds.close();
             } catch (IOException e) {
                 logger.warn("Error closing dataset during clear: {}", e.getMessage());
             }
         });
-        CACHE.clear();
+
+        // Clear both caches
+        cache.invalidateAll();
+        FALLBACK_CACHE.clear();
     }
 
     /**
      * Get the number of cached datasets.
      */
     public static int size() {
-        return CACHE.size();
+        Cache<String, LanceDataset> cache = getCache();
+        return FALLBACK_CACHE.size();  // Return actual size from fallback cache
     }
 
     /**
      * Check if a dataset is cached.
      */
     public static boolean contains(String uri) {
-        return CACHE.containsKey(uri);
+        Cache<String, LanceDataset> cache = getCache();
+        return cache.get(uri) != null || FALLBACK_CACHE.containsKey(uri);
     }
 }

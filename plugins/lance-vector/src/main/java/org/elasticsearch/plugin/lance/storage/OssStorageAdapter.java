@@ -11,6 +11,7 @@ package org.elasticsearch.plugin.lance.storage;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.apache.lucene.util.SuppressForbidden;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.core.PathUtils;
@@ -129,9 +130,7 @@ public class OssStorageAdapter {
      * For Phase 1, this implementation uses simple HTTP GET requests.
      * In Phase 2, this should be replaced with the official OSS SDK.
      */
-    @SuppressForbidden(
-        reason = "Opening HTTP connection to OSS bucket. This should be replaced with proper OSS SDK in Phase 2."
-    )
+    @SuppressForbidden(reason = "Opening HTTP connection to OSS bucket. This should be replaced with proper OSS SDK in Phase 2.")
     public InputStream readObject(String ossUri) throws IOException {
         OssUri uri = parseUri(ossUri);
 

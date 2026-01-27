@@ -143,8 +143,15 @@ public class LanceVectorFieldMapper extends FieldMapper {
                 throw new MapperParsingException("Phase 1 lance_vector supports only read_only external datasets");
             }
 
-            LanceStorageConfig storageConfig = new LanceStorageConfig(type, uri, idColumn, vectorColumn,
-                ossEndpoint, ossAccessKeyId, ossAccessKeySecret);
+            LanceStorageConfig storageConfig = new LanceStorageConfig(
+                type,
+                uri,
+                idColumn,
+                vectorColumn,
+                ossEndpoint,
+                ossAccessKeyId,
+                ossAccessKeySecret
+            );
             return new Builder(name, dims, similarity, storageConfig, parserContext.getIndexSettings().getIndexVersionCreated());
         }
     };
@@ -197,8 +204,19 @@ public class LanceVectorFieldMapper extends FieldMapper {
             if (vector.length != dims) {
                 throw new IllegalArgumentException("query vector dims mismatch expected=" + dims + " got=" + vector.length);
             }
-            return new LanceKnnQuery(name(), storage.uri(), vector, k, numCands, similarity, filter, dims,
-                storage.ossEndpoint(), storage.ossAccessKeyId(), storage.ossAccessKeySecret());
+            return new LanceKnnQuery(
+                name(),
+                storage.uri(),
+                vector,
+                k,
+                numCands,
+                similarity,
+                filter,
+                dims,
+                storage.ossEndpoint(),
+                storage.ossAccessKeyId(),
+                storage.ossAccessKeySecret()
+            );
         }
 
         private static float[] toFloat(byte[] bytes) {

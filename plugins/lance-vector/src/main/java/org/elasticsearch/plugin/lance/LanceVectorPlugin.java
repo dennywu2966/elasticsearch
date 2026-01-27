@@ -9,22 +9,28 @@
 
 package org.elasticsearch.plugin.lance;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.plugin.lance.mapper.LanceVectorFieldMapper;
 import org.elasticsearch.plugin.lance.query.LanceKnnQueryBuilder;
+import org.elasticsearch.plugin.lance.storage.LanceDatasetRegistry;
+import org.elasticsearch.plugin.lance.storage.RealLanceDataset;
 import org.elasticsearch.plugins.MapperPlugin;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.plugins.SearchPlugin;
 import org.elasticsearch.xcontent.ParseField;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 public class LanceVectorPlugin extends Plugin implements MapperPlugin, SearchPlugin {
+    private static final Logger logger = LogManager.getLogger(LanceVectorPlugin.class);
 
     /**
      * Setting to enable Lance profiling for detailed timing information.
@@ -80,5 +86,27 @@ public class LanceVectorPlugin extends Plugin implements MapperPlugin, SearchPlu
                 LanceKnnQueryBuilder::fromXContent  // Parser from XContentParser
             )
         );
+    }
+
+    @Override
+    public void close() throws IOException {
+        logger.info("Closing Lance Vector Plugin - cleaning up resources");
+        try {
+            // Close all cached datasets to release native resources
+            int cacheSize = LanceDatasetRegistry.size();
+            if (cacheSize > 0) {
+                logger.info("Clearing Lance dataset registry with {} cached datasets", cacheSize);
+                LanceDatasetRegistry.clear();
+            }
+            // Close the shared Arrow allocator to release all native memory
+            long allocatedBefore = RealLanceDataset.getAllocatedMemory();
+            if (allocatedBefore > 0) {
+                logger.info("Closing Arrow allocator with {} bytes allocated", allocatedBefore);
+                RealLanceDataset.closeAllocator();
+            }
+        } catch (Exception e) {
+            logger.error("Error closing Lance Vector Plugin resources", e);
+            throw e;
+        }
     }
 }

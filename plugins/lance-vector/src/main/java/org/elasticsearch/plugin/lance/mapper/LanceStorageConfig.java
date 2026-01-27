@@ -25,8 +25,15 @@ public class LanceStorageConfig {
     private final String ossAccessKeyId;
     private final String ossAccessKeySecret;
 
-    public LanceStorageConfig(String type, String uri, String idColumn, String vectorColumn,
-                              String ossEndpoint, String ossAccessKeyId, String ossAccessKeySecret) {
+    public LanceStorageConfig(
+        String type,
+        String uri,
+        String idColumn,
+        String vectorColumn,
+        String ossEndpoint,
+        String ossAccessKeyId,
+        String ossAccessKeySecret
+    ) {
         this.type = Objects.requireNonNull(type);
         this.uri = Objects.requireNonNull(uri);
         this.idColumn = Objects.requireNonNull(idColumn);

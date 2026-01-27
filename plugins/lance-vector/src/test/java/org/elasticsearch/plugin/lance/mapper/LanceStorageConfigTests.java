@@ -46,31 +46,17 @@ public class LanceStorageConfigTests extends ESTestCase {
     }
 
     public void testConstructorWithEmbeddedUri() {
-        LanceStorageConfig config = new LanceStorageConfig(
-            "external",
-            "embedded:test-vectors.json",
-            "_id",
-            "vector",
-            null,
-            null,
-            null
-        );
+        LanceStorageConfig config = new LanceStorageConfig("external", "embedded:test-vectors.json", "_id", "vector", null, null, null);
 
         assertThat(config.uri(), equalTo("embedded:test-vectors.json"));
     }
 
     public void testConstructorRequiresType() {
-        expectThrows(
-            NullPointerException.class,
-            () -> new LanceStorageConfig(null, "file:///path", "_id", "vector", null, null, null)
-        );
+        expectThrows(NullPointerException.class, () -> new LanceStorageConfig(null, "file:///path", "_id", "vector", null, null, null));
     }
 
     public void testConstructorRequiresUri() {
-        expectThrows(
-            NullPointerException.class,
-            () -> new LanceStorageConfig("external", null, "_id", "vector", null, null, null)
-        );
+        expectThrows(NullPointerException.class, () -> new LanceStorageConfig("external", null, "_id", "vector", null, null, null));
     }
 
     public void testConstructorRequiresIdColumn() {

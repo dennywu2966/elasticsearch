@@ -23,6 +23,7 @@ import org.elasticsearch.features.NodeFeature;
 import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.plugin.lance.mapper.LanceVectorFieldMapper;
 import org.elasticsearch.plugin.lance.query.LanceKnnQueryBuilder;
+import org.elasticsearch.plugin.lance.query.PreFilterHeuristic;
 import org.elasticsearch.plugin.lance.rest.RestLanceStatsAction;
 import org.elasticsearch.plugin.lance.storage.LanceDatasetRegistry;
 import org.elasticsearch.plugin.lance.storage.RealLanceDataset;
@@ -72,6 +73,7 @@ public class LanceVectorPlugin extends Plugin implements MapperPlugin, SearchPlu
     public List<Setting<?>> getSettings() {
         List<Setting<?>> settings = new ArrayList<>();
         settings.add(LANCE_PROFILING_ENABLED);
+        settings.add(PreFilterHeuristic.INDEX_SETTING);
         return settings;
     }
 

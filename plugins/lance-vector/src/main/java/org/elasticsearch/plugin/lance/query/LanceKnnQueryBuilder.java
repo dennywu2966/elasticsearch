@@ -15,6 +15,8 @@ import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.query.AbstractQueryBuilder;
+import org.elasticsearch.index.query.BoolQueryBuilder;
+import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.QueryValidationException;
 import org.elasticsearch.index.query.SearchExecutionContext;
 import org.elasticsearch.plugin.lance.mapper.LanceVectorFieldMapper.LanceVectorFieldType;
@@ -24,15 +26,15 @@ import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentParser;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 
 /**
  * Query builder for Lance kNN search.
  * <p>
- * This query bypasses the standard kNN query validation in KnnVectorQueryBuilder
- * by directly calling LanceVectorFieldType.createKnnQuery(). This allows Lance
- * vectors to be searched using custom query syntax:
+ * Supports ES 9.x filter syntax — both single object and array of filter objects:
  * <pre>
  * {
  *   "query": {
@@ -40,7 +42,24 @@ import java.util.Objects;
  *       "field": "vector",
  *       "query_vector": [0.1, 0.2, ...],
  *       "k": 10,
- *       "num_candidates": 100
+ *       "num_candidates": 100,
+ *       "filter": { "term": { "color": "red" } }
+ *     }
+ *   }
+ * }
+ * </pre>
+ * or:
+ * <pre>
+ * {
+ *   "query": {
+ *     "lance_knn": {
+ *       "field": "vector",
+ *       "query_vector": [0.1, 0.2, ...],
+ *       "k": 10,
+ *       "filter": [
+ *         { "term": { "color": "red" } },
+ *         { "range": { "price": { "lte": 100 } } }
+ *       ]
  *     }
  *   }
  * }
@@ -53,35 +72,48 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
     private static final ParseField QUERY_VECTOR_FIELD = new ParseField("query_vector");
     private static final ParseField K_FIELD = new ParseField("k");
     private static final ParseField NUM_CANDIDATES_FIELD = new ParseField("num_candidates");
+    private static final ParseField FILTER_FIELD = new ParseField("filter");
 
     private final String fieldName;
     private final float[] queryVector;
     private final int k;
     private final int numCandidates;
+    private final List<QueryBuilder> filterQueries;
 
     /**
-     * Construct a new LanceKnnQueryBuilder.
+     * Construct a new LanceKnnQueryBuilder with filter queries.
      *
      * @param fieldName     The name of the lance_vector field
      * @param queryVector   The query vector
      * @param k             The number of nearest neighbors to return
-     * @param numCandidates The number of candidates to consider (optional)
+     * @param numCandidates The number of candidates to consider
+     * @param filterQueries Filter queries to apply (single or array, ES 9.x style)
      */
-    public LanceKnnQueryBuilder(String fieldName, float[] queryVector, int k, int numCandidates) {
+    public LanceKnnQueryBuilder(String fieldName, float[] queryVector, int k, int numCandidates, List<QueryBuilder> filterQueries) {
         this.fieldName = fieldName;
         this.queryVector = queryVector;
         this.k = k;
         this.numCandidates = numCandidates;
+        this.filterQueries = filterQueries == null ? List.of() : List.copyOf(filterQueries);
+    }
+
+    /**
+     * Backward-compatible constructor without filter.
+     */
+    public LanceKnnQueryBuilder(String fieldName, float[] queryVector, int k, int numCandidates) {
+        this(fieldName, queryVector, k, numCandidates, null);
     }
 
     /**
      * Read from stream.
      */
     public LanceKnnQueryBuilder(StreamInput in) throws IOException {
+        super(in);
         this.fieldName = in.readString();
         this.queryVector = in.readFloatArray();
         this.k = in.readVInt();
         this.numCandidates = in.readVInt();
+        this.filterQueries = readQueries(in);
     }
 
     @Override
@@ -90,6 +122,11 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
         out.writeFloatArray(queryVector);
         out.writeVInt(k);
         out.writeVInt(numCandidates);
+        writeQueries(out, filterQueries);
+    }
+
+    public List<QueryBuilder> filterQueries() {
+        return filterQueries;
     }
 
     @Override
@@ -99,6 +136,13 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
         builder.field(QUERY_VECTOR_FIELD.getPreferredName(), queryVector);
         builder.field(K_FIELD.getPreferredName(), k);
         builder.field(NUM_CANDIDATES_FIELD.getPreferredName(), numCandidates);
+        if (filterQueries.isEmpty() == false) {
+            builder.startArray(FILTER_FIELD.getPreferredName());
+            for (QueryBuilder filterQuery : filterQueries) {
+                filterQuery.toXContent(builder, params);
+            }
+            builder.endArray();
+        }
         printBoostAndQueryName(builder);
         builder.endObject();
     }
@@ -113,20 +157,36 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
         LanceVectorFieldType lanceFieldType = (LanceVectorFieldType) fieldType;
         VectorData vectorData = VectorData.fromFloats(queryVector);
 
-        // Call Lance's createKnnQuery with full signature matching DenseVectorFieldType
-        // Lance ignores most of these parameters since it uses external storage
+        // Build combined filter from filterQueries
+        Query filter = buildFilterQuery(context);
+
         return lanceFieldType.createKnnQuery(
             vectorData,
             k,
             numCandidates,
             null,  // visitPercentage - ignored by Lance
             null,  // oversample - ignored by Lance
-            null,  // filter - TODO: support filters in lance_knn query
+            filter,
             null,  // vectorSimilarity - ignored by Lance
             null,  // parentFilter - ignored by Lance (no nested support)
             null,  // heuristic - ignored by Lance
             false  // hnswEarlyTermination - ignored by Lance
         );
+    }
+
+    private Query buildFilterQuery(SearchExecutionContext context) throws IOException {
+        if (filterQueries.isEmpty()) {
+            return null;
+        }
+        if (filterQueries.size() == 1) {
+            return filterQueries.get(0).toQuery(context);
+        }
+        // Multiple filters: combine with BoolQuery must clauses
+        BoolQueryBuilder boolQuery = new BoolQueryBuilder();
+        for (QueryBuilder fq : filterQueries) {
+            boolQuery.filter(fq);
+        }
+        return boolQuery.toQuery(context);
     }
 
     protected QueryValidationException validate(SearchExecutionContext context) {
@@ -164,15 +224,16 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
 
     @Override
     protected int doHashCode() {
-        return Objects.hash(fieldName, Arrays.hashCode(queryVector), k, numCandidates);
+        return Objects.hash(fieldName, Arrays.hashCode(queryVector), k, numCandidates, filterQueries);
     }
 
     @Override
     protected boolean doEquals(LanceKnnQueryBuilder other) {
         return Objects.equals(fieldName, other.fieldName)
             && Arrays.equals(queryVector, other.queryVector)
-            && Objects.equals(k, other.k)
-            && Objects.equals(numCandidates, other.numCandidates);
+            && k == other.k
+            && numCandidates == other.numCandidates
+            && Objects.equals(filterQueries, other.filterQueries);
     }
 
     @Override
@@ -187,6 +248,7 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
 
     /**
      * Parse a LanceKnnQueryBuilder from XContent.
+     * Supports ES 9.x filter syntax: single object or array of filter objects.
      */
     public static LanceKnnQueryBuilder fromXContent(XContentParser parser) throws IOException {
         String fieldName = null;
@@ -195,6 +257,7 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
         int numCandidates = 100;
         float boost = AbstractQueryBuilder.DEFAULT_BOOST;
         String queryName = null;
+        List<QueryBuilder> filterQueries = new ArrayList<>();
 
         String currentFieldName = null;
         XContentParser.Token token;
@@ -202,12 +265,22 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
             if (token == XContentParser.Token.FIELD_NAME) {
                 currentFieldName = parser.currentName();
             } else if (token == XContentParser.Token.START_ARRAY) {
-                if (FIELD_FIELD.match(currentFieldName, parser.getDeprecationHandler())) {
-                    throw new IllegalArgumentException("field [" + currentFieldName + "] should be a string");
-                } else if (QUERY_VECTOR_FIELD.match(currentFieldName, parser.getDeprecationHandler())) {
+                if (QUERY_VECTOR_FIELD.match(currentFieldName, parser.getDeprecationHandler())) {
                     queryVector = parseQueryVector(parser);
+                } else if (FILTER_FIELD.match(currentFieldName, parser.getDeprecationHandler())) {
+                    // Array of filter objects — ES 9.x style
+                    while (parser.nextToken() != XContentParser.Token.END_ARRAY) {
+                        filterQueries.add(AbstractQueryBuilder.parseTopLevelQuery(parser));
+                    }
                 } else {
-                    throw new IllegalArgumentException("unknown field [" + currentFieldName + "]");
+                    throw new IllegalArgumentException("unknown array field [" + currentFieldName + "]");
+                }
+            } else if (token == XContentParser.Token.START_OBJECT) {
+                if (FILTER_FIELD.match(currentFieldName, parser.getDeprecationHandler())) {
+                    // Single filter object
+                    filterQueries.add(AbstractQueryBuilder.parseTopLevelQuery(parser));
+                } else {
+                    throw new IllegalArgumentException("unknown object field [" + currentFieldName + "]");
                 }
             } else if (token.isValue()) {
                 if (FIELD_FIELD.match(currentFieldName, parser.getDeprecationHandler())) {
@@ -233,7 +306,7 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
             throw new IllegalArgumentException("query_vector is required");
         }
 
-        LanceKnnQueryBuilder builder = new LanceKnnQueryBuilder(fieldName, queryVector, k, numCandidates);
+        LanceKnnQueryBuilder builder = new LanceKnnQueryBuilder(fieldName, queryVector, k, numCandidates, filterQueries);
         builder.boost(boost);
         if (queryName != null) {
             builder.queryName(queryName);
@@ -241,11 +314,8 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
         return builder;
     }
 
-    /**
-     * Parse a query vector from XContent.
-     */
     private static float[] parseQueryVector(XContentParser parser) throws IOException {
-        java.util.ArrayList<Float> vector = new java.util.ArrayList<>();
+        ArrayList<Float> vector = new ArrayList<>();
         while (parser.nextToken() != XContentParser.Token.END_ARRAY) {
             vector.add((float) parser.doubleValue());
         }

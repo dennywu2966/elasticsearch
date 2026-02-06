@@ -11,25 +11,39 @@ package org.elasticsearch.plugin.lance;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
+import org.elasticsearch.cluster.node.DiscoveryNodes;
+import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
+import org.elasticsearch.common.settings.ClusterSettings;
+import org.elasticsearch.common.settings.IndexScopedSettings;
 import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.settings.SettingsFilter;
+import org.elasticsearch.features.NodeFeature;
 import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.plugin.lance.mapper.LanceVectorFieldMapper;
 import org.elasticsearch.plugin.lance.query.LanceKnnQueryBuilder;
+import org.elasticsearch.plugin.lance.rest.RestLanceStatsAction;
 import org.elasticsearch.plugin.lance.storage.LanceDatasetRegistry;
 import org.elasticsearch.plugin.lance.storage.RealLanceDataset;
+import org.elasticsearch.plugins.ActionPlugin;
 import org.elasticsearch.plugins.MapperPlugin;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.plugins.SearchPlugin;
+import org.elasticsearch.rest.RestController;
+import org.elasticsearch.rest.RestHandler;
 import org.elasticsearch.xcontent.ParseField;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 
-public class LanceVectorPlugin extends Plugin implements MapperPlugin, SearchPlugin {
+public class LanceVectorPlugin extends Plugin implements MapperPlugin, SearchPlugin, ActionPlugin {
     private static final Logger logger = LogManager.getLogger(LanceVectorPlugin.class);
 
     /**
@@ -86,6 +100,21 @@ public class LanceVectorPlugin extends Plugin implements MapperPlugin, SearchPlu
                 LanceKnnQueryBuilder::fromXContent  // Parser from XContentParser
             )
         );
+    }
+
+    @Override
+    public Collection<RestHandler> getRestHandlers(
+        Settings settings,
+        NamedWriteableRegistry namedWriteableRegistry,
+        RestController restController,
+        ClusterSettings clusterSettings,
+        IndexScopedSettings indexScopedSettings,
+        SettingsFilter settingsFilter,
+        IndexNameExpressionResolver indexNameExpressionResolver,
+        Supplier<DiscoveryNodes> nodesInCluster,
+        Predicate<NodeFeature> clusterSupportsFeature
+    ) {
+        return List.of(new RestLanceStatsAction());
     }
 
     @Override

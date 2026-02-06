@@ -11,8 +11,8 @@ package org.elasticsearch.plugin.security.cloudiam;
 import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.env.Environment;
-import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.env.TestEnvironment;
+import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.threadpool.TestThreadPool;
 import org.elasticsearch.xpack.core.security.authc.AuthenticationResult;
 import org.elasticsearch.xpack.core.security.authc.AuthenticationToken;
@@ -88,13 +88,7 @@ public class CloudIamRealmTests extends ESTestCase {
             ).build();
             CountingIamClient iamClient = new CountingIamClient(true, IamPrincipal.PrincipalType.USER);
             CloudIamRealm realm = createRealm(settings, threadPool, null, iamClient);
-            String header = buildSignedHeader(
-                "AKID",
-                "mock",
-                "nonce",
-                Instant.now().minus(10, ChronoUnit.MINUTES),
-                null
-            );
+            String header = buildSignedHeader("AKID", "mock", "nonce", Instant.now().minus(10, ChronoUnit.MINUTES), null);
             CloudIamToken token = CloudIamToken.fromHeaders(header, 8192);
             PlainActionFuture<AuthenticationResult<User>> future = new PlainActionFuture<>();
             realm.authenticate(token, future);
@@ -261,26 +255,11 @@ public class CloudIamRealmTests extends ESTestCase {
         return Settings.builder()
             .put("path.home", createTempDir())
             .put(RealmSettings.realmSettingPrefix(CloudIamRealmSettings.TYPE) + "iam1.order", 0)
-            .put(
-                CloudIamRealmSettings.AUTH_MODE.getConcreteSettingForNamespace("iam1").getKey(),
-                "mock"
-            )
-            .put(
-                CloudIamRealmSettings.ROLE_MAPPING_ENABLED.getConcreteSettingForNamespace("iam1").getKey(),
-                false
-            )
-            .put(
-                CloudIamRealmSettings.MOCK_SIGNATURE.getConcreteSettingForNamespace("iam1").getKey(),
-                "mock"
-            )
-            .putList(
-                CloudIamRealmSettings.MOCK_ROLES.getConcreteSettingForNamespace("iam1").getKey(),
-                "read_only"
-            )
-            .put(
-                CloudIamRealmSettings.ALLOWED_SKEW.getConcreteSettingForNamespace("iam1").getKey(),
-                "10m"
-            );
+            .put(CloudIamRealmSettings.AUTH_MODE.getConcreteSettingForNamespace("iam1").getKey(), "mock")
+            .put(CloudIamRealmSettings.ROLE_MAPPING_ENABLED.getConcreteSettingForNamespace("iam1").getKey(), false)
+            .put(CloudIamRealmSettings.MOCK_SIGNATURE.getConcreteSettingForNamespace("iam1").getKey(), "mock")
+            .putList(CloudIamRealmSettings.MOCK_ROLES.getConcreteSettingForNamespace("iam1").getKey(), "read_only")
+            .put(CloudIamRealmSettings.ALLOWED_SKEW.getConcreteSettingForNamespace("iam1").getKey(), "10m");
     }
 
     private String buildSignedHeader(String accessKeyId, String signature, String nonce, Instant timestamp, String sessionToken) {
@@ -288,12 +267,20 @@ public class CloudIamRealmTests extends ESTestCase {
         builder.append("{")
             .append("\"Action\":\"GetCallerIdentity\",")
             .append("\"Version\":\"2015-04-01\",")
-            .append("\"AccessKeyId\":\"").append(accessKeyId).append("\",")
-            .append("\"Signature\":\"").append(signature).append("\",")
+            .append("\"AccessKeyId\":\"")
+            .append(accessKeyId)
+            .append("\",")
+            .append("\"Signature\":\"")
+            .append(signature)
+            .append("\",")
             .append("\"SignatureMethod\":\"HMAC-SHA1\",")
             .append("\"SignatureVersion\":\"1.0\",")
-            .append("\"SignatureNonce\":\"").append(nonce).append("\",")
-            .append("\"Timestamp\":\"").append(timestamp.toString()).append("\"");
+            .append("\"SignatureNonce\":\"")
+            .append(nonce)
+            .append("\",")
+            .append("\"Timestamp\":\"")
+            .append(timestamp.toString())
+            .append("\"");
         if (sessionToken != null) {
             builder.append(",\"SecurityToken\":\"").append(sessionToken).append("\"");
         }

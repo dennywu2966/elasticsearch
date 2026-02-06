@@ -621,19 +621,20 @@ public class KnnVectorQueryBuilder extends AbstractQueryBuilder<KnnVectorQueryBu
                 // Use reflection to call createKnnQuery method on LanceVectorFieldType
                 try {
                     @SuppressWarnings("unchecked")
-                    java.lang.reflect.Method createKnnMethod = fieldType.getClass().getMethod(
-                        "createKnnQuery",
-                        VectorData.class,
-                        int.class,
-                        int.class,
-                        Float.class,
-                        Float.class,
-                        Query.class,
-                        Float.class,
-                        BitSetProducer.class,
-                        DenseVectorFieldMapper.FilterHeuristic.class,
-                        boolean.class
-                    );
+                    java.lang.reflect.Method createKnnMethod = fieldType.getClass()
+                        .getMethod(
+                            "createKnnQuery",
+                            VectorData.class,
+                            int.class,
+                            int.class,
+                            Float.class,
+                            Float.class,
+                            Query.class,
+                            Float.class,
+                            BitSetProducer.class,
+                            DenseVectorFieldMapper.FilterHeuristic.class,
+                            boolean.class
+                        );
                     return (Query) createKnnMethod.invoke(
                         fieldType,
                         queryVector,

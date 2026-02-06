@@ -139,11 +139,30 @@ public class RealLanceDataset implements LanceDataset {
                 if (uri.startsWith("oss://") && config.isOssConfigured()) {
                     logger.info("Configuring OSS environment variables: endpoint={}", config.ossEndpoint());
 
-                    // lance-java SDK reads OSS configuration from environment variables
-                    // These are consumed by the underlying lance-rust object store implementation
-                    setEnvIfChanged("OSS_ENDPOINT", config.ossEndpoint());
-                    setEnvIfChanged("OSS_ACCESS_KEY_ID", config.ossAccessKeyId());
-                    setEnvIfChanged("OSS_ACCESS_KEY_SECRET", config.ossAccessKeySecret());
+                    // Check if environment variables are already set (proper way)
+                    boolean envAlreadySet = System.getenv("OSS_ENDPOINT") != null
+                        && System.getenv("OSS_ACCESS_KEY_ID") != null
+                        && System.getenv("OSS_ACCESS_KEY_SECRET") != null;
+
+                    if (envAlreadySet) {
+                        logger.info(
+                            "OSS environment variables already set (recommended approach). "
+                                + " Lance will use pre-configured credentials from process environment."
+                        );
+                    } else {
+                        logger.warn(
+                            "OSS environment variables not set in process environment. "
+                                + "Attempting fallback via reflection (may not work reliably). "
+                                + "Recommended: Set OSS_ENDPOINT, OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET "
+                                + "in the parent shell before starting ES. "
+                                + "See plugins/lance-vector/ENVIRONMENT_VARIABLE_SETUP.md for details."
+                        );
+                        // lance-java SDK reads OSS configuration from environment variables
+                        // These are consumed by the underlying lance-rust object store implementation
+                        setEnvIfChanged("OSS_ENDPOINT", config.ossEndpoint());
+                        setEnvIfChanged("OSS_ACCESS_KEY_ID", config.ossAccessKeyId());
+                        setEnvIfChanged("OSS_ACCESS_KEY_SECRET", config.ossAccessKeySecret());
+                    }
                 }
             }
 
@@ -207,27 +226,58 @@ public class RealLanceDataset implements LanceDataset {
 
     /**
      * Set environment variable if the value has changed.
-     * This avoids unnecessary environment variable mutations.
+     * <p>
+     * <b>WARNING:</b> This method uses reflection to modify the Java environment map.
+     * This is a <b>high-risk operation</b> with the following limitations:
+     * <ul>
+     *   <li>Not thread-safe: concurrent modifications may cause race conditions</li>
+     *   <li>JVM-version dependent: relies on internal implementation details</li>
+     *   <li>May not work with SecurityManager enabled</li>
+     *   <li>Changes may not be visible to native Lance code</li>
+     * </ul>
+     * <p>
+     * <b>RECOMMENDED APPROACH:</b> Set environment variables in the parent shell
+     * before starting Elasticsearch. See {@code ENVIRONMENT_VARIABLE_SETUP.md}
+     * for detailed instructions.
+     * <p>
+     * This method is kept as a fallback for development/testing only.
      */
     @SuppressForbidden(
         reason = "Need to set OSS environment variables for Lance native library. "
-            + "Lance Rust SDK reads these from process environment, not Java System.getenv()."
+            + "Lance Rust SDK reads these from process environment (getenv()), not Java System.getenv(). "
+            + "This is a fallback mechanism; production deployments should set environment variables "
+            + "in the parent shell before starting ES. See ENVIRONMENT_VARIABLE_SETUP.md for details."
     )
     private static void setEnvIfChanged(String name, String value) {
         try {
             String current = System.getenv(name);
             if (current == null || current.equals(value) == false) {
                 // Use reflection to modify environment variables since System.getenv() is immutable
+                // NOTE: This modifies the Java-side environment map only; native getenv() may not see these changes
                 var env = System.getenv();
                 var field = env.getClass().getDeclaredField("m");
                 field.setAccessible(true);
                 @SuppressWarnings("unchecked")
                 var writableEnv = (java.util.Map<String, String>) field.get(env);
                 writableEnv.put(name, value);
-                logger.debug("Set environment variable: {}={}", name, value != null ? "***" : null);
+                logger.warn(
+                    "Environment variable {} was set via reflection (fallback mechanism). "
+                        + "This may not work reliably. Recommended: Set {} in the parent shell before starting ES. "
+                        + "See plugins/lance-vector/ENVIRONMENT_VARIABLE_SETUP.md for details.",
+                    name,
+                    name
+                );
+                logger.debug("Environment variable {} set via reflection to: {}", name, value != null ? "***" : null);
             }
         } catch (Exception e) {
-            logger.warn("Failed to set environment variable {}: {}", name, e.getMessage());
+            logger.warn(
+                "Failed to set environment variable {} via reflection: {}. "
+                    + "This may cause OSS authentication failures. "
+                    + "Set environment variables in the parent shell before starting ES. "
+                    + "See plugins/lance-vector/ENVIRONMENT_VARIABLE_SETUP.md for details.",
+                name,
+                e.getMessage()
+            );
         }
     }
 
@@ -400,8 +450,11 @@ public class RealLanceDataset implements LanceDataset {
                     if (!hasNext) break;
 
                     batchCount++;
-                    logger.info("Batch {} loadNextBatch() took {} ms (includes OSS partition fetch)",
-                        batchCount, batchLoadNanos / 1_000_000);
+                    logger.info(
+                        "Batch {} loadNextBatch() took {} ms (includes OSS partition fetch)",
+                        batchCount,
+                        batchLoadNanos / 1_000_000
+                    );
 
                     VectorSchemaRoot batch = reader.getVectorSchemaRoot();
                     long processStartNanos = System.nanoTime();

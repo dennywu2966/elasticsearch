@@ -13,10 +13,11 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.common.cache.Cache;
 import org.elasticsearch.common.cache.CacheBuilder;
+import org.elasticsearch.common.cache.RemovalListener;
+import org.elasticsearch.common.cache.RemovalNotification;
 import org.elasticsearch.core.TimeValue;
 
 import java.io.IOException;
-import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
@@ -30,6 +31,10 @@ import java.util.function.Supplier;
  * Thread-safe: Uses Elasticsearch's Cache with automatic eviction to prevent
  * unbounded memory growth. Datasets are evicted based on LRU policy when the
  * cache reaches its maximum size.
+ * <p>
+ * <b>Concurrency Model:</b> Uses double-checked locking for thread-safe
+ * dataset loading. The loading state is tracked in a separate map to prevent
+ * multiple threads from loading the same dataset simultaneously.
  */
 public class LanceDatasetRegistry {
     private static final Logger logger = LogManager.getLogger(LanceDatasetRegistry.class);
@@ -40,8 +45,47 @@ public class LanceDatasetRegistry {
     // Time after which cached datasets are eligible for eviction
     private static final TimeValue CACHE_TTL = TimeValue.timeValueHours(1);
 
-    // Use Elasticsearch's Cache with automatic eviction instead of ConcurrentHashMap
+    // Use Elasticsearch's Cache with automatic eviction
     private static volatile Cache<String, LanceDataset> CACHE;
+
+    // Tracks which datasets are currently being loaded to prevent duplicate loads
+    private static final ConcurrentHashMap<String, Object> LOADING_URIS = new ConcurrentHashMap<>();
+
+    /**
+     * Removal listener for cache evictions.
+     * <p>
+     * This callback is invoked when datasets are evicted from the cache due to:
+     * <ul>
+     *   <li>Size limit (LRU eviction when cache is full)</li>
+     *   <li>Time-based expiration (TTL expired)</li>
+     *   <li>Manual invalidation</li>
+     * </ul>
+     * <p>
+     * <b>CRITICAL:</b> This callback ensures native resources (JNI handles, Arrow memory)
+     * are properly released when datasets are automatically evicted. Without this,
+     * evicted datasets would leak native memory and file descriptors.
+     */
+    private static final RemovalListener<String, LanceDataset> DATASET_REMOVAL_LISTENER = new RemovalListener<>() {
+        @Override
+        public void onRemoval(RemovalNotification<String, LanceDataset> notification) {
+            LanceDataset dataset = notification.getValue();
+            String uri = notification.getKey();
+            var reason = notification.getRemovalReason();
+
+            try {
+                if (dataset != null) {
+                    logger.debug("Closing evicted dataset: uri={}, reason={}", uri, reason);
+                    dataset.close();
+                    logger.info("Successfully closed evicted Lance dataset: uri={}, reason={}", uri, reason);
+                }
+            } catch (IOException e) {
+                logger.warn("Failed to close evicted dataset {}: {}", uri, e.getMessage());
+            } finally {
+                // Clear loading state to allow re-loading if needed
+                LOADING_URIS.remove(uri);
+            }
+        }
+    };
 
     private static Cache<String, LanceDataset> getCache() {
         if (CACHE == null) {
@@ -50,6 +94,7 @@ public class LanceDatasetRegistry {
                     CACHE = CacheBuilder.<String, LanceDataset>builder()
                         .setMaximumWeight(MAX_CACHED_DATASETS)
                         .setExpireAfterAccess(CACHE_TTL)
+                        .removalListener(DATASET_REMOVAL_LISTENER)
                         .build();
                     logger.info("Initialized Lance dataset registry with max entries={} and TTL={}", MAX_CACHED_DATASETS, CACHE_TTL);
                 }
@@ -58,39 +103,64 @@ public class LanceDatasetRegistry {
         return CACHE;
     }
 
-    private static final Map<String, LanceDataset> FALLBACK_CACHE = new ConcurrentHashMap<>();
-
     /**
      * Get or load a dataset from the registry.
      * <p>
      * If the dataset is already cached, returns the cached instance.
      * Otherwise, calls the loader to create the dataset and caches it.
+     * <p>
+     * Thread-safe: Uses double-checked locking with a loading marker to prevent
+     * multiple threads from loading the same dataset simultaneously.
      *
-     * @param uri Dataset URI (used as cache key)
+     * @param uri    Dataset URI (used as cache key)
      * @param loader Supplier that loads the dataset if not cached
      * @return The cached or newly loaded dataset
      * @throws IOException if the loader fails
      */
     public static LanceDataset get(String uri, Supplier<LanceDataset> loader) throws IOException {
         Cache<String, LanceDataset> cache = getCache();
+
+        // Fast path: check cache without synchronization
         LanceDataset cached = cache.get(uri);
         if (cached != null) {
             return cached;
         }
 
-        // Use computeIfAbsent on ConcurrentHashMap for atomic load-or-cache
-        // Then put the result in the Cache for automatic eviction
-        return FALLBACK_CACHE.computeIfAbsent(uri, u -> {
+        // Slow path: synchronize to prevent duplicate loads
+        synchronized (uri.intern()) {  // Intern URI for per-URI locking
+            // Double-check: another thread may have loaded while we waited
+            cached = cache.get(uri);
+            if (cached != null) {
+                return cached;
+            }
+
+            // Check if already loading (rare race condition)
+            if (LOADING_URIS.putIfAbsent(uri, uri) != null) {
+                // Another thread is loading this dataset, wait and retry
+                try {
+                    Thread.sleep(10);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted while waiting for dataset load: " + uri, e);
+                }
+                // Retry after short wait
+                cached = cache.get(uri);
+                if (cached != null) {
+                    return cached;
+                }
+                // If still not loaded, continue with loading
+            }
+
             try {
                 logger.debug("Loading dataset into registry: {}", uri);
                 LanceDataset dataset = loader.get();
-                // Put in the Cache for automatic eviction
                 cache.put(uri, dataset);
                 return dataset;
-            } catch (Exception e) {
-                throw new RuntimeException(e);
+            } finally {
+                // Clear loading state
+                LOADING_URIS.remove(uri);
             }
-        });
+        }
     }
 
     /**
@@ -133,24 +203,46 @@ public class LanceDatasetRegistry {
      * Real Lance datasets include:
      * <ul>
      *   <li>Local file:// URIs ending with .lance</li>
-     *   <li>Object storage URIs (oss://, s3://) - these are Lance datasets stored remotely</li>
+     *   <li>Object storage URIs (oss://) ending with .lance or containing .lance/</li>
      *   <li>Paths containing .lance/ directory marker</li>
      * </ul>
+     * <p>
+     * <b>IMPORTANT:</b> Object storage URIs must end with .lance or contain .lance/
+     * to be considered Lance datasets. Files with other extensions (like .json)
+     * are assumed to be test fixtures.
+     * <p>
+     * <b>Note:</b> S3 URIs are not yet supported and will fall back to FakeLanceDataset
+     * for testing purposes.
      *
      * @param uri Dataset URI to check
      * @return true if the URI should use RealLanceDataset, false for test JSON files
      */
     public static boolean isLanceFormat(String uri) {
-        // Object storage URIs (OSS, S3) are always real Lance datasets
-        if (uri.startsWith("oss://") || uri.startsWith("s3://")) {
-            return true;
+        // S3 is not yet supported - return false to use FakeLanceDataset for testing
+        if (uri.startsWith("s3://")) {
+            return false;
         }
+
+        // OSS URIs - only if they have .lance extension or path
+        if (uri.startsWith("oss://")) {
+            // Extract the path part after the bucket
+            int firstSlash = uri.indexOf('/', uri.indexOf(':') + 2);
+            if (firstSlash >= 0 && firstSlash < uri.length() - 1) {
+                String path = uri.substring(firstSlash + 1);
+                return path.endsWith(".lance") || path.contains(".lance/");
+            }
+            return false;
+        }
+
         // Local .lance files or directories
         return uri.endsWith(".lance") || uri.contains(".lance/") || uri.contains(".lance\\");
     }
 
     /**
      * Invalidate and close a specific dataset from the cache.
+     * <p>
+     * This method is thread-safe and can be called while other threads are
+     * accessing the dataset. The dataset will be closed before being removed.
      *
      * @param uri Dataset URI to invalidate
      */
@@ -166,7 +258,7 @@ public class LanceDatasetRegistry {
             }
         }
         cache.invalidate(uri);
-        FALLBACK_CACHE.remove(uri);
+        LOADING_URIS.remove(uri);
     }
 
     /**
@@ -174,23 +266,18 @@ public class LanceDatasetRegistry {
      * <p>
      * This closes all cached datasets and removes them from the registry.
      * Useful for testing or shutdown.
+     * <p>
+     * <b>WARNING:</b> This method is not atomic with respect to concurrent
+     * getOrLoad() calls. New datasets may be loaded while clear() is in progress.
+     * For production use, prefer invalidate() for specific URIs.
      */
     public static void clear() {
         logger.debug("Clearing all datasets from registry");
         Cache<String, LanceDataset> cache = getCache();
 
-        // Close all datasets from fallback cache
-        FALLBACK_CACHE.values().forEach(ds -> {
-            try {
-                ds.close();
-            } catch (IOException e) {
-                logger.warn("Error closing dataset during clear: {}", e.getMessage());
-            }
-        });
-
-        // Clear both caches
+        // The removal listener will handle closing all datasets
         cache.invalidateAll();
-        FALLBACK_CACHE.clear();
+        LOADING_URIS.clear();
     }
 
     /**
@@ -198,7 +285,7 @@ public class LanceDatasetRegistry {
      */
     public static int size() {
         Cache<String, LanceDataset> cache = getCache();
-        return FALLBACK_CACHE.size();  // Return actual size from fallback cache
+        return cache.count();
     }
 
     /**
@@ -206,6 +293,6 @@ public class LanceDatasetRegistry {
      */
     public static boolean contains(String uri) {
         Cache<String, LanceDataset> cache = getCache();
-        return cache.get(uri) != null || FALLBACK_CACHE.containsKey(uri);
+        return cache.get(uri) != null;
     }
 }

@@ -107,7 +107,7 @@ public class LanceVectorOssIntegrationTests extends ESSingleNodeTestCase {
             // Test vector search
             float[] queryVector = new float[128];
             for (int i = 0; i < 128; i++) {
-                queryVector[i] = Math.random();
+                queryVector[i] = (float) Math.random();
             }
 
             var candidates = dataset.search(queryVector, 5, "cosine");
@@ -152,7 +152,7 @@ public class LanceVectorOssIntegrationTests extends ESSingleNodeTestCase {
         // Execute kNN search
         float[] queryVector = new float[128];
         for (int i = 0; i < 128; i++) {
-            queryVector[i] = Math.random();
+            queryVector[i] = (float) Math.random();
         }
 
         KnnSearchBuilder knn = new KnnSearchBuilder("embedding", queryVector, 5, 10, null, null, null);
@@ -209,7 +209,7 @@ public class LanceVectorOssIntegrationTests extends ESSingleNodeTestCase {
             // Test vector search on OSS dataset
             float[] queryVector = new float[128];
             for (int i = 0; i < 128; i++) {
-                queryVector[i] = Math.random();
+                queryVector[i] = (float) Math.random();
             }
 
             long startTime = System.currentTimeMillis();
@@ -266,7 +266,7 @@ public class LanceVectorOssIntegrationTests extends ESSingleNodeTestCase {
         // Execute kNN search against OSS dataset
         float[] queryVector = new float[128];
         for (int i = 0; i < 128; i++) {
-            queryVector[i] = Math.random();
+            queryVector[i] = (float) Math.random();
         }
 
         KnnSearchBuilder knn = new KnnSearchBuilder("embedding", queryVector, 10, 20, null, null, null);

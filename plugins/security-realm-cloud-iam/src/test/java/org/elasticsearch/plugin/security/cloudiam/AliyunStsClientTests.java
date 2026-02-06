@@ -194,12 +194,20 @@ public class AliyunStsClientTests extends ESTestCase {
         builder.append("{")
             .append("\"Action\":\"GetCallerIdentity\",")
             .append("\"Version\":\"2015-04-01\",")
-            .append("\"AccessKeyId\":\"").append(accessKeyId).append("\",")
-            .append("\"Signature\":\"").append(signature).append("\",")
+            .append("\"AccessKeyId\":\"")
+            .append(accessKeyId)
+            .append("\",")
+            .append("\"Signature\":\"")
+            .append(signature)
+            .append("\",")
             .append("\"SignatureMethod\":\"HMAC-SHA1\",")
             .append("\"SignatureVersion\":\"1.0\",")
-            .append("\"SignatureNonce\":\"").append(nonce).append("\",")
-            .append("\"Timestamp\":\"").append(timestamp.toString()).append("\"");
+            .append("\"SignatureNonce\":\"")
+            .append(nonce)
+            .append("\",")
+            .append("\"Timestamp\":\"")
+            .append(timestamp.toString())
+            .append("\"");
         if (sessionToken != null) {
             builder.append(",\"SecurityToken\":\"").append(sessionToken).append("\"");
         }

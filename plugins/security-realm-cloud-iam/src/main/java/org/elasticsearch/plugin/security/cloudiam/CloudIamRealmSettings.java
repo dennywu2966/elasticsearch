@@ -49,11 +49,7 @@ public final class CloudIamRealmSettings {
         "mock.roles",
         key -> Setting.stringListSetting(key, List.of("read_only"), Setting.Property.NodeScope)
     );
-    public static final Setting.AffixSetting<String> AUTH_MODE = RealmSettings.simpleString(
-        TYPE,
-        "auth.mode",
-        Setting.Property.NodeScope
-    );
+    public static final Setting.AffixSetting<String> AUTH_MODE = RealmSettings.simpleString(TYPE, "auth.mode", Setting.Property.NodeScope);
     public static final Setting.AffixSetting<Boolean> ROLE_MAPPING_ENABLED = Setting.affixKeySetting(
         RealmSettings.realmSettingPrefix(TYPE),
         "role_mapping.enabled",

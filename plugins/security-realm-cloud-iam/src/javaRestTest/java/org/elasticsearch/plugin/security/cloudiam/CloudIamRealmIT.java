@@ -51,11 +51,17 @@ public class CloudIamRealmIT extends ESRestTestCase {
             + "\"Action\":\"GetCallerIdentity\","
             + "\"Version\":\"2015-04-01\","
             + "\"AccessKeyId\":\"AKID\","
-            + "\"Signature\":\"" + signature + "\","
+            + "\"Signature\":\""
+            + signature
+            + "\","
             + "\"SignatureMethod\":\"HMAC-SHA1\","
             + "\"SignatureVersion\":\"1.0\","
-            + "\"SignatureNonce\":\"" + nonce + "\","
-            + "\"Timestamp\":\"" + timestamp + "\""
+            + "\"SignatureNonce\":\""
+            + nonce
+            + "\","
+            + "\"Timestamp\":\""
+            + timestamp
+            + "\""
             + "}";
         return Base64.getEncoder().encodeToString(json.getBytes(StandardCharsets.UTF_8));
     }

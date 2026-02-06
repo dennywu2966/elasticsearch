@@ -400,8 +400,11 @@ public class RealLanceDataset implements LanceDataset {
                     if (!hasNext) break;
 
                     batchCount++;
-                    logger.info("Batch {} loadNextBatch() took {} ms (includes OSS partition fetch)",
-                        batchCount, batchLoadNanos / 1_000_000);
+                    logger.info(
+                        "Batch {} loadNextBatch() took {} ms (includes OSS partition fetch)",
+                        batchCount,
+                        batchLoadNanos / 1_000_000
+                    );
 
                     VectorSchemaRoot batch = reader.getVectorSchemaRoot();
                     long processStartNanos = System.nanoTime();

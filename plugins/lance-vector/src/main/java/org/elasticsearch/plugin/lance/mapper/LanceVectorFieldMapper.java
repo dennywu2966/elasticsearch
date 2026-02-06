@@ -96,11 +96,21 @@ public class LanceVectorFieldMapper extends FieldMapper {
                 type = typeObj.toString();
             }
 
+            // Shard-aware fields (optional, takes precedence over uri)
+            String uriPrefix = storage.get("uri_prefix") != null ? storage.get("uri_prefix").toString() : null;
+            String shardPath = storage.get("shard_path") != null ? storage.get("shard_path").toString() : null;
+            String datasetName = storage.get("dataset_name") != null ? storage.get("dataset_name").toString() : null;
+
+            // Legacy single URI (required unless uri_prefix is present)
+            String uri = null;
             Object uriObj = storage.get("uri");
-            if (uriObj == null) {
-                throw new MapperParsingException("[storage.uri] is required for lance_vector");
+            if (uriObj != null) {
+                uri = uriObj.toString();
             }
-            String uri = uriObj.toString();
+
+            if (uriPrefix == null && uri == null) {
+                throw new MapperParsingException("Either [storage.uri] or [storage.uri_prefix] is required for lance_vector");
+            }
 
             String idColumn = "_id";
             Object idColObj = storage.get("lance_id_column");
@@ -150,7 +160,10 @@ public class LanceVectorFieldMapper extends FieldMapper {
                 vectorColumn,
                 ossEndpoint,
                 ossAccessKeyId,
-                ossAccessKeySecret
+                ossAccessKeySecret,
+                uriPrefix,
+                shardPath,
+                datasetName
             );
             return new Builder(name, dims, similarity, storageConfig, parserContext.getIndexSettings().getIndexVersionCreated());
         }
@@ -276,7 +289,17 @@ public class LanceVectorFieldMapper extends FieldMapper {
         builder.field(SIMILARITY_FIELD, ft.similarity);
         builder.startObject(STORAGE_FIELD);
         builder.field("type", ft.storage.type());
-        builder.field("uri", ft.storage.uri());
+        if (ft.storage.isShardAware()) {
+            builder.field("uri_prefix", ft.storage.uriPrefix());
+            if (ft.storage.shardPath() != null) {
+                builder.field("shard_path", ft.storage.shardPath());
+            }
+            if (ft.storage.datasetName() != null) {
+                builder.field("dataset_name", ft.storage.datasetName());
+            }
+        } else {
+            builder.field("uri", ft.storage.uri());
+        }
         builder.field("lance_id_column", ft.storage.idColumn());
         builder.field("lance_vector_column", ft.storage.vectorColumn());
         builder.field("read_only", true);

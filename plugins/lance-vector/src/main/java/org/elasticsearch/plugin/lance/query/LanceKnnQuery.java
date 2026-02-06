@@ -52,6 +52,44 @@ import java.util.stream.Collectors;
 public class LanceKnnQuery extends Query implements QueryProfilerProvider {
     private static final Logger logger = LogManager.getLogger(LanceKnnQuery.class);
 
+    /**
+     * Strategy for how filters are applied during kNN search.
+     */
+    public enum FilterStrategy {
+        /** No filter applied */
+        NONE,
+        /** Pre-filter: push filtered IDs to Lance SDK before search */
+        PRE_FILTER,
+        /** Post-filter: intersect Lance results with Lucene filter bitset */
+        POST_FILTER
+    }
+
+    /**
+     * Decision about which filter strategy to use, including the count of matching documents.
+     *
+     * @param strategy The chosen filter strategy
+     * @param filteredDocCount Number of documents matching the filter (-1 if no filter)
+     */
+    public record FilterDecision(FilterStrategy strategy, int filteredDocCount) {}
+
+    /**
+     * Decide which filter strategy to use based on the filter selectivity and heuristic.
+     *
+     * @param filteredDocCount Number of docs matching the filter, or -1 if no filter
+     * @param k Number of nearest neighbors requested
+     * @param heuristic The pre-filter heuristic setting
+     * @return FilterDecision with strategy and doc count
+     */
+    public static FilterDecision decideFilterStrategy(int filteredDocCount, int k, PreFilterHeuristic heuristic) {
+        if (filteredDocCount < 0) {
+            return new FilterDecision(FilterStrategy.NONE, filteredDocCount);
+        }
+        if (heuristic.shouldPreFilter(filteredDocCount, k)) {
+            return new FilterDecision(FilterStrategy.PRE_FILTER, filteredDocCount);
+        }
+        return new FilterDecision(FilterStrategy.POST_FILTER, filteredDocCount);
+    }
+
     private final String fieldName;
     private final String storageUri;
     private final float[] queryVector;

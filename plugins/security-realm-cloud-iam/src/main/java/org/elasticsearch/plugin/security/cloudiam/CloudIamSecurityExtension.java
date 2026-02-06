@@ -20,8 +20,13 @@ public class CloudIamSecurityExtension implements SecurityExtension {
             CloudIamRealmSettings.TYPE,
             config -> {
                 String mode = config.getSetting(CloudIamRealmSettings.AUTH_MODE, () -> "aliyun");
-                IamClient iamClient = "mock".equalsIgnoreCase(mode) ? new MockIamClient(config) : new AliyunStsClient(config);
-                return new CloudIamRealm(config, components.threadPool(), components.roleMapper(), iamClient);
+                IamClient stsClient = "mock".equalsIgnoreCase(mode)
+                    ? new MockIamClient(config)
+                    : new AliyunStsClient(config);
+                IamClient oauthClient = "mock".equalsIgnoreCase(mode)
+                    ? new MockIamClient(config)
+                    : new OAuthTokenValidator(config);
+                return new CloudIamRealm(config, components.threadPool(), components.roleMapper(), stsClient, oauthClient);
             }
         );
     }

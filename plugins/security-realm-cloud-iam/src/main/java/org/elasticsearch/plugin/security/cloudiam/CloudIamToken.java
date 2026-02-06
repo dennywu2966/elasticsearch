@@ -8,6 +8,7 @@
  */
 package org.elasticsearch.plugin.security.cloudiam;
 
+import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.core.Tuple;
@@ -32,12 +33,17 @@ public class CloudIamToken implements AuthenticationToken {
     private static final String PARAM_TIMESTAMP = "Timestamp";
     private static final String PARAM_SECURITY_TOKEN = "SecurityToken";
 
+    // STS signature fields
     private final String accessKeyId;
     private final Instant timestamp;
     private final String nonce;
     private String signature;
     private final String sessionToken;
     private final Map<String, String> signedParams;
+
+    // OAuth bearer token field
+    private final String oauthToken;
+
     private final boolean valid;
     private final String validationError;
 
@@ -48,6 +54,7 @@ public class CloudIamToken implements AuthenticationToken {
         String signature,
         String sessionToken,
         Map<String, String> signedParams,
+        String oauthToken,
         boolean valid,
         String validationError
     ) {
@@ -57,13 +64,52 @@ public class CloudIamToken implements AuthenticationToken {
         this.signature = signature;
         this.sessionToken = sessionToken;
         this.signedParams = signedParams;
+        this.oauthToken = oauthToken;
         this.valid = valid;
         this.validationError = validationError;
     }
 
     public static CloudIamToken fromHeaders(String signedHeader, int signedHeaderMaxBytes) {
+        return fromHeaders(signedHeader, null, signedHeaderMaxBytes);
+    }
+
+    /**
+     * Creates a CloudIamToken from either STS signature header or OAuth Bearer token.
+     *
+     * If both headers are present, OAuth Bearer token takes precedence (modern auth method).
+     * This is logged as a warning for debugging purposes.
+     *
+     * @param signedHeader The X-ES-IAM-Signed header value (STS signature)
+     * @param authorizationHeader The Authorization header value (OAuth Bearer token)
+     * @param signedHeaderMaxBytes Maximum size for signed header
+     * @return A CloudIamToken instance
+     */
+    public static CloudIamToken fromHeaders(String signedHeader, String authorizationHeader, int signedHeaderMaxBytes) {
+        // Check if both headers are present (unusual case)
+        boolean hasOAuth = Strings.hasText(authorizationHeader);
+        boolean hasSTS = Strings.hasText(signedHeader);
+
+        // Prefer OAuth Bearer token (modern auth method)
+        if (hasOAuth) {
+            String token = authorizationHeader;
+            if (token.startsWith("Bearer ")) {
+                token = token.substring(7);
+            }
+            if (Strings.hasText(token)) {
+                // Log warning if both headers present (OAuth takes precedence)
+                if (hasSTS) {
+                    // Note: In production, this should use proper logger
+                    System.err.println("[CloudIamToken] Both Authorization and X-ES-IAM-Signed headers present. Using OAuth token.");
+                }
+                System.err.println("[CloudIamToken] Creating OAuth token: " + token.substring(0, Math.min(20, token.length())) + "...");
+                return new CloudIamToken(null, null, null, null, null, null, token, true, null);
+            }
+        }
+
+        // Fall back to STS signature
         if (signedHeader == null || signedHeader.isBlank()) {
-            return invalid("missing signed header");
+            System.err.println("[CloudIamToken] Missing authentication: signedHeader=" + (signedHeader == null ? "null" : "empty") + ", authorizationHeader=" + (authorizationHeader == null ? "null" : "empty"));
+            return invalid("missing authentication: both signed header and bearer token are absent");
         }
         if (signedHeader.length() > signedHeaderMaxBytes * 2L) {
             return invalid("signed header too large");
@@ -97,11 +143,11 @@ public class CloudIamToken implements AuthenticationToken {
         } catch (DateTimeParseException e) {
             return invalid("invalid timestamp");
         }
-        return new CloudIamToken(accessKeyId, timestamp, nonce, signature, sessionToken, params, true, null);
+        return new CloudIamToken(accessKeyId, timestamp, nonce, signature, sessionToken, params, null, true, null);
     }
 
     private static CloudIamToken invalid(String reason) {
-        return new CloudIamToken(null, null, null, null, null, null, false, reason);
+        return new CloudIamToken(null, null, null, null, null, null, null, false, reason);
     }
 
     private static Map<String, String> parseSignedParams(byte[] decodedJson) throws Exception {
@@ -157,18 +203,45 @@ public class CloudIamToken implements AuthenticationToken {
         return signedParams;
     }
 
+    /**
+     * Returns the OAuth access token if this is an OAuth-based token.
+     * @return The OAuth access token or null if this is an STS token
+     */
+    public String oauthToken() {
+        return oauthToken;
+    }
+
+    /**
+     * Checks if this token is an OAuth bearer token.
+     * @return true if this token uses OAuth authentication
+     */
+    public boolean isOAuthToken() {
+        return oauthToken != null;
+    }
+
     @Override
     public String principal() {
+        if (isOAuthToken()) {
+            return oauthToken;
+        }
         return accessKeyId == null ? "" : accessKeyId;
     }
 
     @Override
     public Object credentials() {
+        if (isOAuthToken()) {
+            return oauthToken;
+        }
         return signature;
     }
 
     @Override
     public void clearCredentials() {
-        signature = null;
+        if (isOAuthToken()) {
+            // For OAuth tokens, we clear by setting the reference to null
+            // Note: This is a no-op since oauthToken is final, but the interface requires this method
+        } else {
+            signature = null;
+        }
     }
 }

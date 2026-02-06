@@ -10,6 +10,7 @@ package org.elasticsearch.plugin.security.cloudiam;
 
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.common.Strings;
+import java.util.Arrays;
 import org.elasticsearch.common.cache.Cache;
 import org.elasticsearch.common.cache.CacheBuilder;
 import org.elasticsearch.common.util.concurrent.ThreadContext;
@@ -33,7 +34,8 @@ import java.util.Map;
 public class CloudIamRealm extends Realm implements CachingRealm {
     private final ThreadPool threadPool;
     private final UserRoleMapper roleMapper;
-    private final IamClient iamClient;
+    private final IamClient stsClient;
+    private final IamClient oauthClient;
     private final String signedHeader;
     private final boolean roleMappingEnabled;
     private final boolean allowAssumedRole;
@@ -44,11 +46,12 @@ public class CloudIamRealm extends Realm implements CachingRealm {
     private final Cache<String, Boolean> nonceCache;
     private final String[] staticRoles;
 
-    public CloudIamRealm(RealmConfig config, ThreadPool threadPool, UserRoleMapper roleMapper, IamClient iamClient) {
+    public CloudIamRealm(RealmConfig config, ThreadPool threadPool, UserRoleMapper roleMapper, IamClient stsClient, IamClient oauthClient) {
         super(config);
         this.threadPool = threadPool;
         this.roleMapper = roleMapper;
-        this.iamClient = iamClient;
+        this.stsClient = stsClient;
+        this.oauthClient = oauthClient;
         this.signedHeader = config.getSetting(CloudIamRealmSettings.SIGNED_HEADER, () -> "X-ES-IAM-Signed");
         this.roleMappingEnabled = config.getSetting(CloudIamRealmSettings.ROLE_MAPPING_ENABLED);
         this.allowAssumedRole = config.getSetting(CloudIamRealmSettings.ALLOW_ASSUMED_ROLE);
@@ -69,10 +72,12 @@ public class CloudIamRealm extends Realm implements CachingRealm {
     @Override
     public AuthenticationToken token(ThreadContext context) {
         String signedRequest = context.getHeader(signedHeader);
-        if (Strings.hasText(signedRequest) == false) {
+        String authorization = context.getHeader("Authorization");
+        if (Strings.hasText(signedRequest) == false && Strings.hasText(authorization) == false) {
             return null;
         }
-        return CloudIamToken.fromHeaders(signedRequest, signedHeaderMaxBytes);
+        System.err.println("[CloudIamRealm] token() called - signedRequest=" + (signedRequest != null) + ", authorization=" + (authorization != null));
+        return CloudIamToken.fromHeaders(signedRequest, authorization, signedHeaderMaxBytes);
     }
 
     @Override
@@ -86,7 +91,9 @@ public class CloudIamRealm extends Realm implements CachingRealm {
             listener.onResponse(AuthenticationResult.terminate("invalid cloud iam token: " + iamToken.validationError()));
             return;
         }
-        if (isTimestampValid(iamToken.timestamp()) == false) {
+        // Timestamp validation only applies to STS tokens, not OAuth tokens
+        // OAuth tokens are validated via the userinfo endpoint which checks expiration
+        if (iamToken.isOAuthToken() == false && isTimestampValid(iamToken.timestamp()) == false) {
             listener.onResponse(AuthenticationResult.terminate("invalid iam token timestamp"));
             return;
         }
@@ -110,7 +117,9 @@ public class CloudIamRealm extends Realm implements CachingRealm {
                 return;
             }
         }
-        threadPool.executor(ThreadPool.Names.GENERIC).execute(() -> iamClient.verify(iamToken, ActionListener.wrap(principal -> {
+        // Route to appropriate client based on token type
+        IamClient client = iamToken.isOAuthToken() ? oauthClient : stsClient;
+        threadPool.executor(ThreadPool.Names.GENERIC).execute(() -> client.verify(iamToken, ActionListener.wrap(principal -> {
             if (allowAssumedRole == false && principal.principalType() == IamPrincipal.PrincipalType.ASSUMED_ROLE) {
                 listener.onResponse(AuthenticationResult.terminate("assumed role is not allowed"));
                 return;
@@ -170,22 +179,30 @@ public class CloudIamRealm extends Realm implements CachingRealm {
         String cacheKey,
         ActionListener<AuthenticationResult<User>> listener
     ) {
+        System.err.println("[CloudIamRealm] resolveRoles() - principal ARN: " + principal.arn() + ", roleMappingEnabled: " + roleMappingEnabled);
         if (roleMappingEnabled && roleMapper != null) {
             UserRoleMapper.UserData userData = new UserRoleMapper.UserData(principal.arn(), null, List.of(), metadata, config);
+            System.err.println("[CloudIamRealm] Calling roleMapper.resolveRoles() for user: " + principal.arn());
             roleMapper.resolveRoles(userData, ActionListener.wrap(rolesSet -> {
+                System.err.println("[CloudIamRealm] Role mapping result - roles found: " + rolesSet.size() + ", roles: " + rolesSet);
                 if (rolesSet.isEmpty()) {
+                    System.err.println("[CloudIamRealm] FAILED: No roles mapped for user: " + principal.arn());
                     listener.onResponse(AuthenticationResult.terminate("no roles mapped"));
                     return;
                 }
                 User user = new User(principal.arn(), rolesSet.toArray(Strings.EMPTY_ARRAY), null, null, metadata, true);
                 cacheUser(cacheKey, user);
+                System.err.println("[CloudIamRealm] SUCCESS: User authenticated with roles: " + rolesSet);
                 listener.onResponse(AuthenticationResult.success(user));
             }, e -> {
+                System.err.println("[CloudIamRealm] FAILED: Role mapping error: " + e.getMessage());
+                e.printStackTrace(System.err);
                 cacheFailure(cacheKey);
                 listener.onResponse(AuthenticationResult.terminate("role mapping failed", e));
             }));
             return;
         }
+        System.err.println("[CloudIamRealm] Using static roles (role mapping disabled): " + Arrays.toString(staticRoles));
         User user = new User(principal.arn(), staticRoles, null, null, metadata, true);
         cacheUser(cacheKey, user);
         listener.onResponse(AuthenticationResult.success(user));
@@ -200,6 +217,15 @@ public class CloudIamRealm extends Realm implements CachingRealm {
     }
 
     private String cacheKey(CloudIamToken token) {
+        if (token.isOAuthToken()) {
+            // For OAuth tokens, use a truncated version of the token as cache key
+            String oauthToken = token.oauthToken();
+            if (oauthToken != null && oauthToken.length() > 16) {
+                return "oauth:" + oauthToken.substring(0, 16);
+            }
+            return "oauth:" + oauthToken;
+        }
+        // For STS tokens, use access key ID and session token
         StringBuilder key = new StringBuilder(token.accessKeyId());
         if (Strings.hasText(token.sessionToken())) {
             key.append(':').append(token.sessionToken());

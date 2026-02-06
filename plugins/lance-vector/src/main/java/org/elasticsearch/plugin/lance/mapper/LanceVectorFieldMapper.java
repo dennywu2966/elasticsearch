@@ -217,19 +217,7 @@ public class LanceVectorFieldMapper extends FieldMapper {
             if (vector.length != dims) {
                 throw new IllegalArgumentException("query vector dims mismatch expected=" + dims + " got=" + vector.length);
             }
-            return new LanceKnnQuery(
-                name(),
-                storage.uri(),
-                vector,
-                k,
-                numCands,
-                similarity,
-                filter,
-                dims,
-                storage.ossEndpoint(),
-                storage.ossAccessKeyId(),
-                storage.ossAccessKeySecret()
-            );
+            return new LanceKnnQuery(name(), storage, "unknown", -1, vector, k, numCands, similarity, filter, dims);
         }
 
         private static float[] toFloat(byte[] bytes) {

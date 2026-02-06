@@ -26,6 +26,7 @@ import org.apache.lucene.search.Weight;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.index.mapper.IdFieldMapper;
 import org.elasticsearch.index.mapper.Uid;
+import org.elasticsearch.plugin.lance.mapper.LanceStorageConfig;
 import org.elasticsearch.plugin.lance.profile.LanceTimer;
 import org.elasticsearch.plugin.lance.profile.LanceTimingContext;
 import org.elasticsearch.plugin.lance.storage.LanceDataset;
@@ -43,8 +44,14 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
- * A minimal Lucene query that joins Lance candidates to Lucene documents by _id.
- * This is intentionally simple for Phase 1 and uses a fake dataset loader.
+ * A Lucene query that joins Lance candidates to Lucene documents by _id.
+ * <p>
+ * In <b>legacy mode</b> (single URI), the dataset is opened and searched once in
+ * {@code createWeight()} and the candidates are shared across all leaf segments.
+ * <p>
+ * In <b>shard-aware mode</b> (uri_prefix + template), the dataset URI is resolved
+ * per-shard and searched in {@code scorerSupplier()} so each shard reads its own
+ * Lance dataset.
  * <p>
  * Implements QueryProfilerProvider to provide detailed timing information
  * when profiling is enabled via the profile=true search parameter.
@@ -53,81 +60,71 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
     private static final Logger logger = LogManager.getLogger(LanceKnnQuery.class);
 
     private final String fieldName;
-    private final String storageUri;
+    private final LanceStorageConfig storageConfig;
+    private final String indexName;
+    private final int shardId; // -1 = unknown, resolve per-leaf
     private final float[] queryVector;
     private final int k;
     private final int numCandidates;
     private final String similarity;
     private final Query filter;
     private final int dims;
-    private final String ossEndpoint;
-    private final String ossAccessKeyId;
-    private final String ossAccessKeySecret;
 
     public LanceKnnQuery(
         String fieldName,
-        String storageUri,
+        LanceStorageConfig storageConfig,
+        String indexName,
+        int shardId,
         float[] queryVector,
         int k,
         int numCandidates,
         String similarity,
         Query filter,
-        int dims,
-        String ossEndpoint,
-        String ossAccessKeyId,
-        String ossAccessKeySecret
+        int dims
     ) {
         this.fieldName = Objects.requireNonNull(fieldName);
-        this.storageUri = Objects.requireNonNull(storageUri);
+        this.storageConfig = Objects.requireNonNull(storageConfig);
+        this.indexName = Objects.requireNonNull(indexName);
+        this.shardId = shardId;
         this.queryVector = Objects.requireNonNull(queryVector);
         this.k = k;
         this.numCandidates = numCandidates;
         this.similarity = similarity == null ? "cosine" : similarity;
         this.filter = filter;
         this.dims = dims;
-        this.ossEndpoint = ossEndpoint;
-        this.ossAccessKeyId = ossAccessKeyId;
-        this.ossAccessKeySecret = ossAccessKeySecret;
     }
 
     @Override
     public Weight createWeight(IndexSearcher searcher, ScoreMode scoreMode, float boost) throws IOException {
-        // Initialize timing context for this query
-        LanceTimingContext context = null;
+        LanceTimingContext timingContext = null;
         try {
-            context = LanceTimingContext.getOrCreate();
-            // Activate timing collection - this enables LanceTimer to record timings
-            context.activate();
+            timingContext = LanceTimingContext.getOrCreate();
+            timingContext.activate();
 
-            // Use unified registry that automatically selects RealLanceDataset for .lance files
-            // and FakeLanceDataset for JSON test files
-            // For OSS URIs, include OSS configuration
-            LanceDatasetConfig config;
-            if (storageUri.startsWith("oss://") && ossEndpoint != null) {
-                config = new LanceDatasetConfig("_id", "vector", dims, ossEndpoint, ossAccessKeyId, ossAccessKeySecret);
-            } else {
-                config = new LanceDatasetConfig("_id", "vector", dims, null, null, null);
-            }
-
-            LanceDataset dataset;
-            List<LanceDataset.Candidate> candidates;
-            try (var timer = new LanceTimer(LanceTimingContext.LanceTimingStage.REGISTRY_CACHE_LOOKUP)) {
-                dataset = LanceDatasetRegistry.getOrLoad(storageUri, dims, config);
-                candidates = dataset.search(queryVector, numCandidates, similarity);
-            }
-
-            logger.debug(
-                "Lance KNN: dataset has {} dims, searched with numCandidates={}, got {} candidates",
-                dataset.dims(),
-                numCandidates,
-                candidates.size()
-            );
-            // Store filter query - we'll create the weight per-leaf to handle ES's DFS phase
-            // which may use a different IndexSearcher than the one passed here
             final Query filterQuery = this.filter;
             final float queryBoost = boost;
             final int topK = k;
-            final LanceTimingContext capturedContext = context;  // Capture for cleanup
+            final LanceTimingContext capturedContext = timingContext;
+
+            // Legacy mode: search once, share candidates across all segments
+            final List<LanceDataset.Candidate> sharedCandidates;
+            if (storageConfig.isShardAware() == false) {
+                String resolvedUri = storageConfig.resolveUri(indexName, Math.max(shardId, 0));
+                LanceDatasetConfig config = buildDatasetConfig();
+                LanceDataset dataset;
+                try (var timer = new LanceTimer(LanceTimingContext.LanceTimingStage.REGISTRY_CACHE_LOOKUP)) {
+                    dataset = LanceDatasetRegistry.getOrLoad(resolvedUri, dims, config);
+                    sharedCandidates = dataset.search(queryVector, numCandidates, similarity);
+                }
+                logger.debug(
+                    "Lance KNN (legacy): dataset has {} dims, searched with numCandidates={}, got {} candidates",
+                    dataset.dims(),
+                    numCandidates,
+                    sharedCandidates.size()
+                );
+            } else {
+                sharedCandidates = null; // Will be resolved per-shard in scorerSupplier
+            }
 
             return new Weight(this) {
                 @Override
@@ -146,9 +143,29 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
 
                 @Override
                 public ScorerSupplier scorerSupplier(LeafReaderContext context) throws IOException {
+                    List<LanceDataset.Candidate> candidates;
+                    if (sharedCandidates != null) {
+                        // Legacy: use shared candidates
+                        candidates = sharedCandidates;
+                    } else {
+                        // Shard-aware: resolve URI and search per-shard
+                        int leafShardId = resolveShardId(context);
+                        String resolvedUri = storageConfig.resolveUri(indexName, leafShardId);
+                        LanceDatasetConfig config = buildDatasetConfig();
+                        LanceDataset dataset;
+                        try (var timer = new LanceTimer(LanceTimingContext.LanceTimingStage.REGISTRY_CACHE_LOOKUP)) {
+                            dataset = LanceDatasetRegistry.getOrLoad(resolvedUri, dims, config);
+                            candidates = dataset.search(queryVector, numCandidates, similarity);
+                        }
+                        logger.debug(
+                            "Lance KNN (shard-aware): shard={}, uri={}, candidates={}",
+                            leafShardId,
+                            resolvedUri,
+                            candidates.size()
+                        );
+                    }
+
                     // Create filter weight using an IndexSearcher from the context's top-level reader
-                    // This is necessary because ES's DFS phase may call scorerSupplier with a context
-                    // from a different top-level reader than the searcher passed to createWeight
                     Weight filterWeight = null;
                     if (filterQuery != null) {
                         IndexSearcher contextSearcher = new IndexSearcher(context.parent);
@@ -170,7 +187,7 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
                                 @Override
                                 public int docID() {
                                     if (idx < 0) {
-                                        return -1; // Not yet positioned
+                                        return -1;
                                     } else if (idx >= docIds.size()) {
                                         return NO_MORE_DOCS;
                                     }
@@ -219,12 +236,33 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
                 }
             };
         } finally {
-            // Clean up timing context to prevent ThreadLocal memory leak
-            if (context != null) {
-                context.deactivate();
-                context.clear();
+            if (timingContext != null) {
+                timingContext.deactivate();
+                timingContext.clear();
             }
         }
+    }
+
+    private LanceDatasetConfig buildDatasetConfig() {
+        String ossEp = storageConfig.ossEndpoint();
+        String ossKeyId = storageConfig.ossAccessKeyId();
+        String ossKeySecret = storageConfig.ossAccessKeySecret();
+        if (ossEp != null) {
+            return new LanceDatasetConfig("_id", "vector", dims, ossEp, ossKeyId, ossKeySecret);
+        }
+        return new LanceDatasetConfig("_id", "vector", dims, null, null, null);
+    }
+
+    /**
+     * Resolve the shard ID from LeafReaderContext.
+     * Uses the shardId passed at construction if available.
+     * Otherwise defaults to 0.
+     */
+    private int resolveShardId(LeafReaderContext context) {
+        if (shardId >= 0) {
+            return shardId;
+        }
+        return 0;
     }
 
     private static class LanceScorer extends Scorer {
@@ -286,7 +324,6 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
                         filterBitSet.set(doc);
                     }
                 } else {
-                    // Filter matched no documents in this segment
                     return Map.of();
                 }
             }
@@ -325,7 +362,11 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
 
     @Override
     public String toString(String field) {
-        return "LanceKnnQuery(" + fieldName + ", uri=" + storageUri + ")";
+        if (storageConfig.isShardAware()) {
+            return "LanceKnnQuery(" + fieldName + ", index=" + indexName + ", shard=" + shardId + ", shardAware=true)";
+        }
+        String uri = storageConfig.uri();
+        return "LanceKnnQuery(" + fieldName + ", uri=" + uri + ")";
     }
 
     @Override
@@ -337,13 +378,14 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
         return k == other.k
             && numCandidates == other.numCandidates
             && fieldName.equals(other.fieldName)
-            && storageUri.equals(other.storageUri)
+            && indexName.equals(other.indexName)
+            && shardId == other.shardId
             && similarity.equals(other.similarity);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(fieldName, storageUri, k, numCandidates, similarity);
+        return Objects.hash(fieldName, indexName, shardId, k, numCandidates, similarity);
     }
 
     @Override
@@ -351,40 +393,22 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
         visitor.visitLeaf(this);
     }
 
-    /**
-     * Get the timing breakdown for this query.
-     * This method is called to retrieve timing information.
-     *
-     * @return Map containing timing breakdown, or null if profiling is not active
-     */
     private Map<String, Object> getTimingBreakdown() {
         LanceTimingContext context = LanceTimingContext.getOrCreate();
         if (context != null && context.isActive()) {
             Map<String, Object> timing = context.toDebugMap();
-            // Log the timing breakdown for debugging
             logger.info("Lance kNN timing breakdown: {}", timing);
             return timing;
         }
         return null;
     }
 
-    /**
-     * Store the profiling information in the QueryProfiler.
-     * This is called by Elasticsearch when profiling is enabled.
-     * <p>
-     * Note: This method logs the timing breakdown. Full Profile API integration
-     * will be added in a future update to include timing in the profile response.
-     *
-     * @param queryProfiler the query profiler (not currently used for custom timing)
-     */
     @Override
     public void profile(QueryProfiler queryProfiler) {
         Map<String, Object> timing = getTimingBreakdown();
         if (timing != null && timing.isEmpty() == false) {
-            // Get the profile breakdown for this query and add Lance timing to debug info
             org.elasticsearch.search.profile.query.QueryProfileBreakdown breakdown = queryProfiler.getQueryBreakdown(this);
             if (breakdown != null) {
-                // Inject Lance timing into the debug map using the new API
                 breakdown.putAllDebugData(timing);
                 logger.debug("Lance kNN profile timing: {}", timing);
             }

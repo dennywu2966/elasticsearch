@@ -19,6 +19,8 @@ import static org.hamcrest.Matchers.equalTo;
  */
 public class LanceStorageConfigTests extends ESTestCase {
 
+    // --- Legacy mode tests (backward compatibility) ---
+
     public void testConstructorAndAccessors() {
         LanceStorageConfig config = new LanceStorageConfig("external", "file:///path/to/dataset", "_id", "vector", null, null, null);
 
@@ -26,6 +28,7 @@ public class LanceStorageConfigTests extends ESTestCase {
         assertThat(config.uri(), equalTo("file:///path/to/dataset"));
         assertThat(config.idColumn(), equalTo("_id"));
         assertThat(config.vectorColumn(), equalTo("vector"));
+        assertFalse(config.isShardAware());
     }
 
     public void testConstructorWithOssUri() {
@@ -79,5 +82,145 @@ public class LanceStorageConfigTests extends ESTestCase {
         assertThat(config2.type(), equalTo("local"));
         assertThat(config1.uri(), equalTo("file:///path1"));
         assertThat(config2.uri(), equalTo("file:///path2"));
+    }
+
+    // --- Shard-aware mode tests ---
+
+    public void testResolveUriWithShardTemplate() {
+        LanceStorageConfig config = new LanceStorageConfig(
+            "external",
+            null,
+            "_id",
+            "vector",
+            null,
+            null,
+            null,
+            "oss://bucket/prod",
+            "{index}/shard-{shard_id}",
+            "vectors.lance"
+        );
+        assertThat(config.resolveUri("my-index", 0), equalTo("oss://bucket/prod/my-index/shard-0/vectors.lance"));
+        assertThat(config.resolveUri("my-index", 2), equalTo("oss://bucket/prod/my-index/shard-2/vectors.lance"));
+    }
+
+    public void testResolveUriFallsBackToLegacyUri() {
+        LanceStorageConfig config = new LanceStorageConfig(
+            "external",
+            "oss://bucket/data.lance",
+            "_id",
+            "vector",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+        );
+        assertThat(config.resolveUri("my-index", 0), equalTo("oss://bucket/data.lance"));
+        assertThat(config.resolveUri("my-index", 5), equalTo("oss://bucket/data.lance"));
+    }
+
+    public void testIsShardAware() {
+        LanceStorageConfig sharded = new LanceStorageConfig(
+            "external",
+            null,
+            "_id",
+            "vector",
+            null,
+            null,
+            null,
+            "oss://bucket/prod",
+            "{index}/shard-{shard_id}",
+            "vectors.lance"
+        );
+        assertTrue(sharded.isShardAware());
+
+        LanceStorageConfig legacy = new LanceStorageConfig(
+            "external",
+            "oss://bucket/data.lance",
+            "_id",
+            "vector",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+        );
+        assertFalse(legacy.isShardAware());
+    }
+
+    public void testResolveUriRejectsUnknownPlaceholder() {
+        LanceStorageConfig config = new LanceStorageConfig(
+            "external",
+            null,
+            "_id",
+            "vector",
+            null,
+            null,
+            null,
+            "oss://bucket",
+            "{index}/{unknown}",
+            "data.lance"
+        );
+        expectThrows(IllegalArgumentException.class, () -> config.resolveUri("idx", 0));
+    }
+
+    public void testResolveUriWithNullShardPathDefaultsToEmpty() {
+        LanceStorageConfig config = new LanceStorageConfig(
+            "external",
+            null,
+            "_id",
+            "vector",
+            null,
+            null,
+            null,
+            "oss://bucket/prod",
+            null,
+            "vectors.lance"
+        );
+        assertThat(config.resolveUri("my-index", 0), equalTo("oss://bucket/prod/vectors.lance"));
+    }
+
+    public void testResolveUriWithNullDatasetNameDefaultsToDataLance() {
+        LanceStorageConfig config = new LanceStorageConfig(
+            "external",
+            null,
+            "_id",
+            "vector",
+            null,
+            null,
+            null,
+            "oss://bucket/prod",
+            "{index}/shard-{shard_id}",
+            null
+        );
+        assertThat(config.resolveUri("my-index", 0), equalTo("oss://bucket/prod/my-index/shard-0/data.lance"));
+    }
+
+    public void testShardAwareAccessors() {
+        LanceStorageConfig config = new LanceStorageConfig(
+            "external",
+            null,
+            "_id",
+            "vector",
+            null,
+            null,
+            null,
+            "oss://bucket/prod",
+            "{index}/shard-{shard_id}",
+            "vectors.lance"
+        );
+        assertThat(config.uriPrefix(), equalTo("oss://bucket/prod"));
+        assertThat(config.shardPath(), equalTo("{index}/shard-{shard_id}"));
+        assertThat(config.datasetName(), equalTo("vectors.lance"));
+        assertNull(config.uri());
+    }
+
+    public void testConstructorRejectsNullUriWhenNotShardAware() {
+        expectThrows(
+            NullPointerException.class,
+            () -> new LanceStorageConfig("external", null, "_id", "vector", null, null, null, null, null, null)
+        );
     }
 }

@@ -14,7 +14,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.apache.lucene.util.SuppressForbidden;
 import org.elasticsearch.common.Strings;
-import org.elasticsearch.core.PathUtils;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -73,12 +72,14 @@ public class OssStorageAdapter {
     /**
      * Load OSS credentials from JSON file.
      */
+    @SuppressForbidden(reason = "Need to read OSS credentials from user-specified file location")
     private static OssCredentials loadCredentials(String credentialsPath) throws IOException {
-        Path path = PathUtils.get(credentialsPath);
+        Path path = java.nio.file.Paths.get(credentialsPath);
         if (Files.exists(path) == false) {
             throw new IOException(
                 Strings.format(
-                    "OSS credentials file not found: %s. Please create a credentials file with access_key_id, access_key_secret, endpoint, and region.",
+                    "OSS credentials file not found: %s. Please create a credentials file with "
+                        + "access_key_id, access_key_secret, endpoint, and region.",
                     credentialsPath
                 )
             );

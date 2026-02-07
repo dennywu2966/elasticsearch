@@ -397,7 +397,7 @@ public class RealLanceDataset implements LanceDataset {
                     long batchLoadNanos = System.nanoTime() - batchLoadStartNanos;
                     totalBatchLoadNanos += batchLoadNanos;
 
-                    if (!hasNext) break;
+                    if (hasNext == false) break;
 
                     batchCount++;
                     logger.info(

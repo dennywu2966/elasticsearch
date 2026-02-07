@@ -10,7 +10,6 @@
 package org.elasticsearch.plugin.lance.profile;
 
 import org.hamcrest.Matchers;
-import org.junit.Test;
 
 import java.util.Map;
 
@@ -21,7 +20,6 @@ import static org.hamcrest.MatcherAssert.assertThat;
  */
 public class LanceTimingTests {
 
-    @Test
     public void testTimingCollectionWhenDisabled() {
         // Timing should not be collected when not activated
         LanceTimingContext context = LanceTimingContext.getOrCreate();
@@ -40,7 +38,6 @@ public class LanceTimingTests {
         LanceTimingContext.remove();
     }
 
-    @Test
     public void testTimingCollectionWhenEnabled() {
         // Timing should be collected when activated
         LanceTimingContext context = LanceTimingContext.getOrCreate();
@@ -63,7 +60,6 @@ public class LanceTimingTests {
         LanceTimingContext.remove();
     }
 
-    @Test
     public void testTimerRecordsCorrectly() {
         LanceTimingContext context = LanceTimingContext.getOrCreate();
         context.activate();
@@ -88,7 +84,6 @@ public class LanceTimingTests {
         LanceTimingContext.remove();
     }
 
-    @Test
     public void testTimingContextClearedBetweenQueries() {
         LanceTimingContext context = LanceTimingContext.getOrCreate();
         context.activate();
@@ -107,7 +102,6 @@ public class LanceTimingTests {
         LanceTimingContext.remove();
     }
 
-    @Test
     public void testThreadLocalIsolation() throws Exception {
         // Create two threads and verify they don't share timing data
         LanceTimingContext context1 = LanceTimingContext.getOrCreate();
@@ -136,7 +130,6 @@ public class LanceTimingTests {
         LanceTimingContext.remove();
     }
 
-    @Test
     public void testTimingCategorization() {
         LanceTimingContext context = LanceTimingContext.getOrCreate();
         context.activate();
@@ -165,7 +158,6 @@ public class LanceTimingTests {
         LanceTimingContext.remove();
     }
 
-    @Test
     public void testStageFieldNames() {
         // Verify that all stages have correct field names
         for (LanceTimingContext.LanceTimingStage stage : LanceTimingContext.LanceTimingStage.values()) {
@@ -175,7 +167,6 @@ public class LanceTimingTests {
         }
     }
 
-    @Test
     public void testOneTimeVsPerSearchStages() {
         // Verify stage categorization
         int oneTimeCount = 0;

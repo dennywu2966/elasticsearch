@@ -9,7 +9,7 @@
 
 package org.elasticsearch.plugin.lance.storage;
 
-import org.elasticsearch.core.PathUtils;
+import org.apache.lucene.util.SuppressForbidden;
 import org.elasticsearch.xcontent.XContentFactory;
 import org.elasticsearch.xcontent.XContentParser;
 import org.elasticsearch.xcontent.XContentParserConfiguration;
@@ -53,6 +53,7 @@ public class FakeLanceDataset implements LanceDataset {
         this.dims = dims;
     }
 
+    @SuppressForbidden(reason = "FakeLanceDataset is test-only and needs to read from local files")
     public static FakeLanceDataset load(String uri, int expectedDims) throws IOException {
         InputStream inputStream;
 
@@ -73,7 +74,7 @@ public class FakeLanceDataset implements LanceDataset {
             inputStream = ossAdapter.readObject(uri);
         } else {
             // Load from local file
-            Path path = PathUtils.get(Objects.requireNonNull(uri.replaceFirst("^file://", "")));
+            Path path = java.nio.file.Paths.get(Objects.requireNonNull(uri.replaceFirst("^file://", "")));
             if (Files.exists(path) == false) {
                 throw new IOException("Fake Lance dataset not found at " + path);
             }

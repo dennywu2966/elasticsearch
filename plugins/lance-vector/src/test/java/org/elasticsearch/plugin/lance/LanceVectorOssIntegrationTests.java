@@ -290,15 +290,16 @@ public class LanceVectorOssIntegrationTests extends ESSingleNodeTestCase {
      * Test: Validate LanceDatasetRegistry correctly identifies OSS URIs.
      */
     public void testLanceDatasetRegistryOssUriDetection() {
-        // Test OSS URI detection
+        // Test OSS/S3 URI detection - all object storage URIs are treated as Lance format
         assertTrue(LanceDatasetRegistry.isLanceFormat("oss://bucket/path/to/data.lance"));
         assertTrue(LanceDatasetRegistry.isLanceFormat("oss://my-bucket/datasets/vectors.lance"));
         assertTrue(LanceDatasetRegistry.isLanceFormat("oss://bucket-123/data-2024/embeddings.lance"));
+        assertTrue(LanceDatasetRegistry.isLanceFormat("oss://bucket/data.json"));  // OSS URIs always use RealLanceDataset
+        assertTrue(LanceDatasetRegistry.isLanceFormat("s3://bucket/data.lance"));  // S3 URIs always use RealLanceDataset
 
-        // Test non-OSS URIs
-        assertFalse(LanceDatasetRegistry.isLanceFormat("oss://bucket/data.json"));
-        assertFalse(LanceDatasetRegistry.isLanceFormat("s3://bucket/data.lance"));
+        // Test non-object-storage URIs
         assertFalse(LanceDatasetRegistry.isLanceFormat("file:///path/to/data.json"));
+        assertFalse(LanceDatasetRegistry.isLanceFormat("dataset:embedded.json"));
     }
 
     /**

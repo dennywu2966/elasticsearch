@@ -73,12 +73,16 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
     private static final ParseField K_FIELD = new ParseField("k");
     private static final ParseField NUM_CANDIDATES_FIELD = new ParseField("num_candidates");
     private static final ParseField FILTER_FIELD = new ParseField("filter");
+    private static final ParseField NPROBES_FIELD = new ParseField("nprobes");
+
+    private static final int DEFAULT_NPROBES = 20;
 
     private final String fieldName;
     private final float[] queryVector;
     private final int k;
     private final int numCandidates;
     private final List<QueryBuilder> filterQueries;
+    private final int nprobes;
 
     /**
      * Construct a new LanceKnnQueryBuilder with filter queries.
@@ -90,18 +94,40 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
      * @param filterQueries Filter queries to apply (single or array, ES 9.x style)
      */
     public LanceKnnQueryBuilder(String fieldName, float[] queryVector, int k, int numCandidates, List<QueryBuilder> filterQueries) {
+        this(fieldName, queryVector, k, numCandidates, filterQueries, DEFAULT_NPROBES);
+    }
+
+    /**
+     * Construct a new LanceKnnQueryBuilder with filter queries and nprobes.
+     *
+     * @param fieldName     The name of the lance_vector field
+     * @param queryVector   The query vector
+     * @param k             The number of nearest neighbors to return
+     * @param numCandidates The number of candidates to consider
+     * @param filterQueries Filter queries to apply (single or array, ES 9.x style)
+     * @param nprobes       Number of IVF partitions to probe (1-100)
+     */
+    public LanceKnnQueryBuilder(
+        String fieldName,
+        float[] queryVector,
+        int k,
+        int numCandidates,
+        List<QueryBuilder> filterQueries,
+        int nprobes
+    ) {
         this.fieldName = fieldName;
         this.queryVector = queryVector;
         this.k = k;
         this.numCandidates = numCandidates;
         this.filterQueries = filterQueries == null ? List.of() : List.copyOf(filterQueries);
+        this.nprobes = nprobes;
     }
 
     /**
      * Backward-compatible constructor without filter.
      */
     public LanceKnnQueryBuilder(String fieldName, float[] queryVector, int k, int numCandidates) {
-        this(fieldName, queryVector, k, numCandidates, null);
+        this(fieldName, queryVector, k, numCandidates, null, DEFAULT_NPROBES);
     }
 
     /**
@@ -114,6 +140,7 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
         this.k = in.readVInt();
         this.numCandidates = in.readVInt();
         this.filterQueries = readQueries(in);
+        this.nprobes = in.readVInt();
     }
 
     @Override
@@ -123,10 +150,15 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
         out.writeVInt(k);
         out.writeVInt(numCandidates);
         writeQueries(out, filterQueries);
+        out.writeVInt(nprobes);
     }
 
     public List<QueryBuilder> filterQueries() {
         return filterQueries;
+    }
+
+    public int nprobes() {
+        return nprobes;
     }
 
     @Override
@@ -136,6 +168,9 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
         builder.field(QUERY_VECTOR_FIELD.getPreferredName(), queryVector);
         builder.field(K_FIELD.getPreferredName(), k);
         builder.field(NUM_CANDIDATES_FIELD.getPreferredName(), numCandidates);
+        if (nprobes != DEFAULT_NPROBES) {
+            builder.field(NPROBES_FIELD.getPreferredName(), nprobes);
+        }
         if (filterQueries.isEmpty() == false) {
             builder.startArray(FILTER_FIELD.getPreferredName());
             for (QueryBuilder filterQuery : filterQueries) {
@@ -224,7 +259,7 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
 
     @Override
     protected int doHashCode() {
-        return Objects.hash(fieldName, Arrays.hashCode(queryVector), k, numCandidates, filterQueries);
+        return Objects.hash(fieldName, Arrays.hashCode(queryVector), k, numCandidates, filterQueries, nprobes);
     }
 
     @Override
@@ -233,7 +268,8 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
             && Arrays.equals(queryVector, other.queryVector)
             && k == other.k
             && numCandidates == other.numCandidates
-            && Objects.equals(filterQueries, other.filterQueries);
+            && Objects.equals(filterQueries, other.filterQueries)
+            && nprobes == other.nprobes;
     }
 
     @Override
@@ -255,6 +291,7 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
         float[] queryVector = null;
         int k = 10;
         int numCandidates = 100;
+        int nprobes = DEFAULT_NPROBES;
         float boost = AbstractQueryBuilder.DEFAULT_BOOST;
         String queryName = null;
         List<QueryBuilder> filterQueries = new ArrayList<>();
@@ -289,6 +326,8 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
                     k = parser.intValue(true);
                 } else if (NUM_CANDIDATES_FIELD.match(currentFieldName, parser.getDeprecationHandler())) {
                     numCandidates = parser.intValue(true);
+                } else if (NPROBES_FIELD.match(currentFieldName, parser.getDeprecationHandler())) {
+                    nprobes = parser.intValue(true);
                 } else if (AbstractQueryBuilder.BOOST_FIELD.match(currentFieldName, parser.getDeprecationHandler())) {
                     boost = parser.floatValue();
                 } else if (AbstractQueryBuilder.NAME_FIELD.match(currentFieldName, parser.getDeprecationHandler())) {
@@ -306,7 +345,7 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
             throw new IllegalArgumentException("query_vector is required");
         }
 
-        LanceKnnQueryBuilder builder = new LanceKnnQueryBuilder(fieldName, queryVector, k, numCandidates, filterQueries);
+        LanceKnnQueryBuilder builder = new LanceKnnQueryBuilder(fieldName, queryVector, k, numCandidates, filterQueries, nprobes);
         builder.boost(boost);
         if (queryName != null) {
             builder.queryName(queryName);

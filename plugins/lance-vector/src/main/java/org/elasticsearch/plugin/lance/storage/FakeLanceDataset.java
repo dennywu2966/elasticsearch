@@ -155,6 +155,12 @@ public class FakeLanceDataset implements LanceDataset {
         return allResults.stream().filter(r -> allowedIds.contains(r.id())).limit(k).collect(Collectors.toList());
     }
 
+    @Override
+    public List<Candidate> search(float[] queryVector, int k, String columnName, int nprobes) throws IOException {
+        // FakeLanceDataset ignores nprobes (brute-force search)
+        return search(queryVector, k, "cosine");
+    }
+
     private float score(float[] query, float[] vector, String similarity) {
         if (query.length != vector.length) {
             throw new IllegalArgumentException("Vector dims mismatch");

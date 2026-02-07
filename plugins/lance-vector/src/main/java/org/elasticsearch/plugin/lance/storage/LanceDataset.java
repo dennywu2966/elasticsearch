@@ -82,6 +82,22 @@ public interface LanceDataset extends Closeable {
     List<Candidate> search(float[] queryVector, int k, String columnName, VarCharVector idFilter) throws IOException;
 
     /**
+     * Search with configurable nprobes parameter.
+     * <p>
+     * nprobes controls the number of partitions to search in IVF indexes.
+     * Higher values improve recall at the cost of latency.
+     * Typical range: 1-100, default: 20.
+     *
+     * @param queryVector The query vector
+     * @param k Number of nearest neighbors
+     * @param columnName The vector column name
+     * @param nprobes Number of IVF partitions to probe
+     * @return Search results
+     * @throws IOException if search fails
+     */
+    List<Candidate> search(float[] queryVector, int k, String columnName, int nprobes) throws IOException;
+
+    /**
      * Get the URI this dataset was loaded from.
      */
     String uri();

@@ -373,6 +373,21 @@ public class RealLanceDataset implements LanceDataset {
         return search(queryVector, k, "cosine");
     }
 
+    @Override
+    public List<Candidate> search(float[] queryVector, int k, String columnName, int nprobes) throws IOException {
+        logger.debug("Lance search with nprobes={}, k={}", nprobes, k);
+        if (queryVector.length != dims) {
+            throw new IllegalArgumentException("Query vector dims mismatch: expected " + dims + ", got " + queryVector.length);
+        }
+
+        try (var timer = new LanceTimer(LanceTimingContext.LanceTimingStage.VECTOR_SEARCH_SETUP)) {
+            return vectorSearch(queryVector, k, "cosine", nprobes);
+        } catch (Exception e) {
+            logger.error("Lance search with nprobes failed: {}", e.getMessage(), e);
+            throw new RuntimeException("Lance search with nprobes failed", e);
+        }
+    }
+
     /**
      * Perform vector search using lance-java's native vector search API.
      * This leverages the native Rust implementation for fast approximate nearest neighbor search.
@@ -426,6 +441,127 @@ public class RealLanceDataset implements LanceDataset {
         if (indexed) {
             // Set IVF search parameters for indexed search
             queryBuilder.setNprobes(effectiveNprobes);
+        }
+
+        Query query = queryBuilder.build();
+
+        long queryBuildNanos = System.nanoTime() - jniStartNanos;
+        logger.info("JNI Query.build() took {} us (should be <100us)", queryBuildNanos / 1000);
+
+        // Build scan options with the vector search query
+        long scanBuildStartNanos = System.nanoTime();
+        ScanOptions scanOptions = new ScanOptions.Builder().columns(List.of(idColumn)).nearest(query).limit(numCandidates).build();
+        long scanBuildNanos = System.nanoTime() - scanBuildStartNanos;
+        logger.info("JNI ScanOptions.build() took {} us (should be <100us)", scanBuildNanos / 1000);
+
+        // Execute the search - preallocate list to avoid resizing
+        List<Candidate> candidates = new ArrayList<>(numCandidates);
+
+        // Measure scanner creation (this is where OSS connection happens)
+        long scannerStartNanos = System.nanoTime();
+        try (LanceScanner scanner = dataset.newScan(scanOptions); ArrowReader reader = scanner.scanBatches()) {
+            long scannerCreateNanos = System.nanoTime() - scannerStartNanos;
+            logger.info("JNI dataset.newScan() + scanBatches() took {} ms (OSS connection setup)", scannerCreateNanos / 1_000_000);
+
+            try (var timer = new LanceTimer(LanceTimingContext.LanceTimingStage.NATIVE_SCAN_SETUP)) {
+                // Scanner setup complete
+            }
+
+            // Measure each batch load separately to identify OSS fetch latency
+            int batchCount = 0;
+            long totalBatchLoadNanos = 0;
+            long totalBatchProcessNanos = 0;
+
+            try (var timer = new LanceTimer(LanceTimingContext.LanceTimingStage.NATIVE_SEARCH_EXECUTION)) {
+                while (true) {
+                    long batchLoadStartNanos = System.nanoTime();
+                    boolean hasNext = reader.loadNextBatch();
+                    long batchLoadNanos = System.nanoTime() - batchLoadStartNanos;
+                    totalBatchLoadNanos += batchLoadNanos;
+
+                    if (!hasNext) break;
+
+                    batchCount++;
+                    logger.info(
+                        "Batch {} loadNextBatch() took {} ms (includes OSS partition fetch)",
+                        batchCount,
+                        batchLoadNanos / 1_000_000
+                    );
+
+                    VectorSchemaRoot batch = reader.getVectorSchemaRoot();
+                    long processStartNanos = System.nanoTime();
+                    try (var batchTimer = new LanceTimer(LanceTimingContext.LanceTimingStage.BATCH_PROCESSING)) {
+                        extractCandidates(batch, similarity, candidates);
+                        // Clear the batch to release Arrow buffers early
+                        batch.clear();
+                    }
+                    totalBatchProcessNanos += System.nanoTime() - processStartNanos;
+                }
+            }
+
+            logger.info(
+                "Lance search summary: batches={}, totalBatchLoad={}ms, totalBatchProcess={}ms, candidates={}",
+                batchCount,
+                totalBatchLoadNanos / 1_000_000,
+                totalBatchProcessNanos / 1_000_000,
+                candidates.size()
+            );
+        }
+        // ArrowReader and LanceScanner are auto-closed here, releasing all Arrow memory
+
+        // Sort by score descending (higher is better)
+        try (var timer = new LanceTimer(LanceTimingContext.LanceTimingStage.SCORE_CONVERSION)) {
+            candidates.sort(Comparator.comparingDouble(Candidate::score).reversed());
+
+            // Return only the requested number of candidates
+            if (candidates.size() > numCandidates) {
+                return new ArrayList<>(candidates.subList(0, numCandidates));
+            }
+        }
+        return candidates;
+    }
+
+    /**
+     * Vector search with explicit nprobes parameter.
+     * <p>
+     * This overload allows callers to control the nprobes value directly
+     * instead of relying on the instance field or environment variable.
+     *
+     * @param queryVector The query vector
+     * @param numCandidates Number of candidates to return
+     * @param similarity Similarity metric
+     * @param nprobes Number of IVF partitions to probe
+     * @return Search results
+     * @throws Exception if search fails
+     */
+    private List<Candidate> vectorSearch(float[] queryVector, int numCandidates, String similarity, int nprobes) throws Exception {
+        // Log Lance configuration for debugging
+        String lanceIoThreads = System.getenv("LANCE_IO_THREADS");
+        String lanceMaxIopSize = System.getenv("LANCE_MAX_IOP_SIZE");
+
+        logger.info(
+            "Lance search with explicit nprobes: nprobes={}, indexed={}, LANCE_IO_THREADS={}, LANCE_MAX_IOP_SIZE={}, vectors={}, dims={}",
+            nprobes,
+            indexed,
+            lanceIoThreads != null ? lanceIoThreads : "64 (default)",
+            lanceMaxIopSize != null ? lanceMaxIopSize : "16MB (default)",
+            vectorCount,
+            dims
+        );
+
+        // Measure JNI call overhead separately (should be <1ms)
+        long jniStartNanos = System.nanoTime();
+
+        // Build the vector search query
+        Query.Builder queryBuilder = new Query.Builder().setColumn(vectorColumn)
+            .setKey(queryVector)
+            .setK(numCandidates)
+            .setDistanceType(toDistanceType(similarity))
+            .setUseIndex(indexed);
+
+        if (indexed) {
+            // Set IVF search parameters for indexed search
+            queryBuilder.setNprobes(nprobes);
         }
 
         Query query = queryBuilder.build();

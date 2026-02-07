@@ -356,6 +356,23 @@ public class RealLanceDataset implements LanceDataset {
         }
     }
 
+    @Override
+    public List<Candidate> search(float[] queryVector, int k, String columnName, VarCharVector idFilter) throws IOException {
+        if (idFilter == null) {
+            return search(queryVector, k, "cosine");
+        }
+
+        // TODO: Implement Lance SDK pre-filter using native filter pushdown
+        // Lance SDK 1.0.0-beta.2 may not support ID-based pre-filtering yet
+        // For now, fall back to unfiltered search
+        logger.warn(
+            "Pre-filter search requested with {} IDs, but Lance SDK filter pushdown not yet implemented. "
+                + "Falling back to unfiltered search. Post-filtering will be applied in LanceKnnQuery.",
+            idFilter.getValueCount()
+        );
+        return search(queryVector, k, "cosine");
+    }
+
     /**
      * Perform vector search using lance-java's native vector search API.
      * This leverages the native Rust implementation for fast approximate nearest neighbor search.

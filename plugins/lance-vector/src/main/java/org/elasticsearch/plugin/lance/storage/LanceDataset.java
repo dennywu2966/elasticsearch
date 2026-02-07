@@ -9,6 +9,8 @@
 
 package org.elasticsearch.plugin.lance.storage;
 
+import org.apache.arrow.vector.VarCharVector;
+
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.List;
@@ -62,6 +64,22 @@ public interface LanceDataset extends Closeable {
      * @return List of candidates sorted by score (highest first)
      */
     List<Candidate> search(float[] query, int numCandidates, String similarity);
+
+    /**
+     * Search with pre-filter: restrict search to documents whose _ids are in the filter vector.
+     * <p>
+     * The idFilter is an Arrow VarCharVector containing UTF-8 encoded _id strings.
+     * Implementations should search only within documents matching these IDs.
+     * The caller owns the idFilter and is responsible for closing it.
+     *
+     * @param queryVector The query vector
+     * @param k Number of nearest neighbors
+     * @param columnName The vector column name (ignored by fake implementation)
+     * @param idFilter Arrow VarCharVector of _id values to restrict search to (nullable — null means no filter)
+     * @return Search results restricted to filtered IDs
+     * @throws IOException if search fails
+     */
+    List<Candidate> search(float[] queryVector, int k, String columnName, VarCharVector idFilter) throws IOException;
 
     /**
      * Get the URI this dataset was loaded from.

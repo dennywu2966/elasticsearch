@@ -9,6 +9,7 @@
 
 package org.elasticsearch.plugin.lance.storage;
 
+import org.apache.arrow.vector.VarCharVector;
 import org.elasticsearch.core.PathUtils;
 import org.elasticsearch.xcontent.XContentFactory;
 import org.elasticsearch.xcontent.XContentParser;
@@ -135,6 +136,23 @@ public class FakeLanceDataset implements LanceDataset {
             .limit(numCandidates)
             .collect(Collectors.toList());
         return scored;
+    }
+
+    @Override
+    public List<Candidate> search(float[] queryVector, int k, String columnName, VarCharVector idFilter) throws IOException {
+        if (idFilter == null) {
+            return search(queryVector, k, "cosine");
+        }
+
+        // Collect allowed IDs from filter
+        var allowedIds = new java.util.HashSet<String>();
+        for (int i = 0; i < idFilter.getValueCount(); i++) {
+            allowedIds.add(new String(idFilter.get(i), java.nio.charset.StandardCharsets.UTF_8));
+        }
+
+        // Get all results then filter (post-hoc filtering for fake implementation)
+        List<Candidate> allResults = search(queryVector, k * 2, "cosine");
+        return allResults.stream().filter(r -> allowedIds.contains(r.id())).limit(k).collect(Collectors.toList());
     }
 
     private float score(float[] query, float[] vector, String similarity) {

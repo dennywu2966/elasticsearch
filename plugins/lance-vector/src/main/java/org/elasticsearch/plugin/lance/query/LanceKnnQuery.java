@@ -9,6 +9,8 @@
 
 package org.elasticsearch.plugin.lance.query;
 
+import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.vector.VarCharVector;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.lucene.index.LeafReaderContext;
@@ -88,6 +90,54 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
             return new FilterDecision(FilterStrategy.PRE_FILTER, filteredDocCount);
         }
         return new FilterDecision(FilterStrategy.POST_FILTER, filteredDocCount);
+    }
+
+    /**
+     * Create an Arrow VarCharVector containing document _ids for pre-filtering.
+     * <p>
+     * This vector is passed to the Lance SDK via JNI for zero-copy filter pushdown.
+     * The caller is responsible for closing the returned vector.
+     *
+     * @param ids List of document _id strings
+     * @param allocator Arrow buffer allocator
+     * @return VarCharVector with the _ids, caller must close
+     */
+    public static VarCharVector createArrowIdVector(List<String> ids, BufferAllocator allocator) {
+        VarCharVector vector = new VarCharVector("_id_filter", allocator);
+        vector.allocateNew(ids.size());
+        for (int i = 0; i < ids.size(); i++) {
+            byte[] bytes = ids.get(i).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            vector.set(i, bytes);
+        }
+        vector.setValueCount(ids.size());
+        return vector;
+    }
+
+    /**
+     * Extract _id strings from documents matching the filter bitset.
+     * <p>
+     * Uses Lucene stored fields to resolve docId to _id. This involves disk I/O
+     * so should only be called when the filter is highly selective (M &lt; K*2).
+     *
+     * @param reader The LeafReader for this segment
+     * @param filterBits BitSet of docs matching the filter
+     * @param maxDoc Maximum document ordinal to scan
+     * @return List of _id strings for matching documents
+     * @throws IOException if stored fields cannot be read
+     */
+    static List<String> extractFilteredIds(org.apache.lucene.index.LeafReader reader, java.util.BitSet filterBits, int maxDoc)
+        throws IOException {
+        List<String> ids = new ArrayList<>();
+        org.apache.lucene.index.StoredFields storedFields = reader.storedFields();
+        for (int docId = filterBits.nextSetBit(0); docId >= 0 && docId < maxDoc; docId = filterBits.nextSetBit(docId + 1)) {
+            org.apache.lucene.document.Document doc = storedFields.document(docId, java.util.Set.of(IdFieldMapper.NAME));
+            org.apache.lucene.index.IndexableField idField = doc.getField(IdFieldMapper.NAME);
+            if (idField != null) {
+                String id = Uid.decodeId(idField.binaryValue().bytes);
+                ids.add(id);
+            }
+        }
+        return ids;
     }
 
     private final String fieldName;

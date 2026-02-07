@@ -48,4 +48,11 @@ public class LanceKnnQueryHybridFilterTests extends ESTestCase {
         var decision = LanceKnnQuery.decideFilterStrategy(1, 10, PreFilterHeuristic.NEVER);
         assertEquals(LanceKnnQuery.FilterStrategy.POST_FILTER, decision.strategy());
     }
+
+    public void testEmptyFilterReturnsPostFilter() {
+        // Empty filter (0 docs) should use post-filter path
+        var decision = LanceKnnQuery.decideFilterStrategy(0, 10, PreFilterHeuristic.AUTO);
+        assertEquals(LanceKnnQuery.FilterStrategy.POST_FILTER, decision.strategy());
+        assertEquals(0, decision.filteredDocCount());
+    }
 }

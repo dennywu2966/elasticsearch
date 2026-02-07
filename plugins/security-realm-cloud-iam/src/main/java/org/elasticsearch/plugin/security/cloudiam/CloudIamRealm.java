@@ -10,7 +10,6 @@ package org.elasticsearch.plugin.security.cloudiam;
 
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.common.Strings;
-import java.util.Arrays;
 import org.elasticsearch.common.cache.Cache;
 import org.elasticsearch.common.cache.CacheBuilder;
 import org.elasticsearch.common.util.concurrent.ThreadContext;
@@ -27,6 +26,7 @@ import org.elasticsearch.xpack.core.security.user.User;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -76,7 +76,9 @@ public class CloudIamRealm extends Realm implements CachingRealm {
         if (Strings.hasText(signedRequest) == false && Strings.hasText(authorization) == false) {
             return null;
         }
-        System.err.println("[CloudIamRealm] token() called - signedRequest=" + (signedRequest != null) + ", authorization=" + (authorization != null));
+        System.err.println(
+            "[CloudIamRealm] token() called - signedRequest=" + (signedRequest != null) + ", authorization=" + (authorization != null)
+        );
         return CloudIamToken.fromHeaders(signedRequest, authorization, signedHeaderMaxBytes);
     }
 
@@ -179,7 +181,9 @@ public class CloudIamRealm extends Realm implements CachingRealm {
         String cacheKey,
         ActionListener<AuthenticationResult<User>> listener
     ) {
-        System.err.println("[CloudIamRealm] resolveRoles() - principal ARN: " + principal.arn() + ", roleMappingEnabled: " + roleMappingEnabled);
+        System.err.println(
+            "[CloudIamRealm] resolveRoles() - principal ARN: " + principal.arn() + ", roleMappingEnabled: " + roleMappingEnabled
+        );
         if (roleMappingEnabled && roleMapper != null) {
             UserRoleMapper.UserData userData = new UserRoleMapper.UserData(principal.arn(), null, List.of(), metadata, config);
             System.err.println("[CloudIamRealm] Calling roleMapper.resolveRoles() for user: " + principal.arn());

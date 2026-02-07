@@ -15,7 +15,6 @@ import org.elasticsearch.core.Tuple;
 import org.elasticsearch.xcontent.XContentType;
 import org.elasticsearch.xpack.core.security.authc.AuthenticationToken;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.Base64;
@@ -108,7 +107,12 @@ public class CloudIamToken implements AuthenticationToken {
 
         // Fall back to STS signature
         if (signedHeader == null || signedHeader.isBlank()) {
-            System.err.println("[CloudIamToken] Missing authentication: signedHeader=" + (signedHeader == null ? "null" : "empty") + ", authorizationHeader=" + (authorizationHeader == null ? "null" : "empty"));
+            System.err.println(
+                "[CloudIamToken] Missing authentication: signedHeader="
+                    + (signedHeader == null ? "null" : "empty")
+                    + ", authorizationHeader="
+                    + (authorizationHeader == null ? "null" : "empty")
+            );
             return invalid("missing authentication: both signed header and bearer token are absent");
         }
         if (signedHeader.length() > signedHeaderMaxBytes * 2L) {

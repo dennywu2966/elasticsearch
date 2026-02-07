@@ -12,8 +12,8 @@ import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.xcontent.XContentHelper;
-import org.elasticsearch.core.Tuple;
 import org.elasticsearch.core.TimeValue;
+import org.elasticsearch.core.Tuple;
 import org.elasticsearch.xcontent.XContentType;
 import org.elasticsearch.xpack.core.security.authc.RealmConfig;
 
@@ -67,9 +67,7 @@ public class AliyunStsClient implements IamClient {
         this.endpoint = resolveEndpoint(endpointSetting, region);
         TimeValue connectTimeout = config.getSetting(CloudIamRealmSettings.IAM_CONNECT_TIMEOUT);
         this.readTimeout = config.getSetting(CloudIamRealmSettings.IAM_READ_TIMEOUT);
-        this.httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofMillis(connectTimeout.getMillis()))
-            .build();
+        this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofMillis(connectTimeout.getMillis())).build();
     }
 
     @Override
@@ -77,10 +75,7 @@ public class AliyunStsClient implements IamClient {
         try {
             Map<String, String> params = validateAndFilter(token.signedParams(), token.accessKeyId());
             String url = endpoint + "/?" + toQueryString(params);
-            HttpRequest request = HttpRequest.newBuilder(URI.create(url))
-                .timeout(Duration.ofMillis(readTimeout.getMillis()))
-                .GET()
-                .build();
+            HttpRequest request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofMillis(readTimeout.getMillis())).GET().build();
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (response.statusCode() != 200) {
                 listener.onFailure(new IllegalStateException("iam verify failed with status " + response.statusCode()));
@@ -212,9 +207,7 @@ public class AliyunStsClient implements IamClient {
                 builder.append('&');
             }
             first = false;
-            builder.append(percentEncode(entry.getKey()))
-                .append('=')
-                .append(percentEncode(entry.getValue()));
+            builder.append(percentEncode(entry.getKey())).append('=').append(percentEncode(entry.getValue()));
         }
         return builder.toString();
     }
@@ -228,7 +221,10 @@ public class AliyunStsClient implements IamClient {
             if ((c >= 'A' && c <= 'Z')
                 || (c >= 'a' && c <= 'z')
                 || (c >= '0' && c <= '9')
-                || c == '-' || c == '_' || c == '.' || c == '~') {
+                || c == '-'
+                || c == '_'
+                || c == '.'
+                || c == '~') {
                 builder.append(c);
             } else {
                 builder.append('%');

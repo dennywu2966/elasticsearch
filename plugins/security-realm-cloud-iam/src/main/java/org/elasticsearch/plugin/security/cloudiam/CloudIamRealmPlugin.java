@@ -27,9 +27,6 @@ public class CloudIamRealmPlugin extends Plugin implements ActionPlugin {
 
     @Override
     public Collection<RestHeaderDefinition> getRestHeaders() {
-        return List.of(
-            new RestHeaderDefinition(DEFAULT_AUTH_HEADER, false),
-            new RestHeaderDefinition(DEFAULT_SIGNED_HEADER, false)
-        );
+        return List.of(new RestHeaderDefinition(DEFAULT_AUTH_HEADER, false), new RestHeaderDefinition(DEFAULT_SIGNED_HEADER, false));
     }
 }

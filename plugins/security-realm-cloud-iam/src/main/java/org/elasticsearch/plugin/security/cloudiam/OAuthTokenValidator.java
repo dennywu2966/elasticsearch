@@ -12,8 +12,8 @@ import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.xcontent.XContentHelper;
-import org.elasticsearch.core.Tuple;
 import org.elasticsearch.core.TimeValue;
+import org.elasticsearch.core.Tuple;
 import org.elasticsearch.xcontent.XContentType;
 import org.elasticsearch.xpack.core.security.authc.RealmConfig;
 
@@ -43,9 +43,7 @@ public class OAuthTokenValidator implements IamClient {
         this.userinfoEndpoint = Strings.hasText(endpointSetting) ? normalizeEndpoint(endpointSetting) : OAUTH_USERINFO_ENDPOINT;
         this.readTimeout = config.getSetting(CloudIamRealmSettings.IAM_READ_TIMEOUT);
         this.httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofMillis(
-                config.getSetting(CloudIamRealmSettings.IAM_CONNECT_TIMEOUT).getMillis()
-            ))
+            .connectTimeout(Duration.ofMillis(config.getSetting(CloudIamRealmSettings.IAM_CONNECT_TIMEOUT).getMillis()))
             .build();
     }
 
@@ -65,15 +63,10 @@ public class OAuthTokenValidator implements IamClient {
                 .GET()
                 .build();
 
-            HttpResponse<String> response = httpClient.send(
-                request,
-                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
-            );
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
 
             if (response.statusCode() != 200) {
-                listener.onFailure(new IllegalStateException(
-                    "OAuth token validation failed with status " + response.statusCode()
-                ));
+                listener.onFailure(new IllegalStateException("OAuth token validation failed with status " + response.statusCode()));
                 return;
             }
 
@@ -188,9 +181,7 @@ public class OAuthTokenValidator implements IamClient {
         if (trimmed.isEmpty()) {
             return trimmed;
         }
-        String normalized = trimmed.startsWith("http://") || trimmed.startsWith("https://")
-            ? trimmed
-            : "https://" + trimmed;
+        String normalized = trimmed.startsWith("http://") || trimmed.startsWith("https://") ? trimmed : "https://" + trimmed;
         if (normalized.endsWith("/")) {
             return normalized.substring(0, normalized.length() - 1);
         }

@@ -16,18 +16,11 @@ import java.util.Map;
 public class CloudIamSecurityExtension implements SecurityExtension {
     @Override
     public Map<String, Realm.Factory> getRealms(SecurityComponents components) {
-        return Map.of(
-            CloudIamRealmSettings.TYPE,
-            config -> {
-                String mode = config.getSetting(CloudIamRealmSettings.AUTH_MODE, () -> "aliyun");
-                IamClient stsClient = "mock".equalsIgnoreCase(mode)
-                    ? new MockIamClient(config)
-                    : new AliyunStsClient(config);
-                IamClient oauthClient = "mock".equalsIgnoreCase(mode)
-                    ? new MockIamClient(config)
-                    : new OAuthTokenValidator(config);
-                return new CloudIamRealm(config, components.threadPool(), components.roleMapper(), stsClient, oauthClient);
-            }
-        );
+        return Map.of(CloudIamRealmSettings.TYPE, config -> {
+            String mode = config.getSetting(CloudIamRealmSettings.AUTH_MODE, () -> "aliyun");
+            IamClient stsClient = "mock".equalsIgnoreCase(mode) ? new MockIamClient(config) : new AliyunStsClient(config);
+            IamClient oauthClient = "mock".equalsIgnoreCase(mode) ? new MockIamClient(config) : new OAuthTokenValidator(config);
+            return new CloudIamRealm(config, components.threadPool(), components.roleMapper(), stsClient, oauthClient);
+        });
     }
 }

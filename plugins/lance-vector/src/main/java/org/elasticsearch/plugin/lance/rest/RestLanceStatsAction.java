@@ -10,6 +10,7 @@
 package org.elasticsearch.plugin.lance.rest;
 
 import org.elasticsearch.client.internal.node.NodeClient;
+import org.elasticsearch.plugin.lance.query.LanceSearchMetrics;
 import org.elasticsearch.plugin.lance.storage.LanceDatasetRegistry;
 import org.elasticsearch.plugin.lance.storage.RealLanceDataset;
 import org.elasticsearch.rest.BaseRestHandler;
@@ -100,6 +101,16 @@ public class RestLanceStatsAction extends BaseRestHandler {
 
             // Health status
             builder.field("health", health);
+
+            // Search metrics
+            builder.startObject("search");
+            builder.field("total_searches", LanceSearchMetrics.getTotalSearches());
+            builder.field("total_search_time_ms", LanceSearchMetrics.getTotalSearchTimeNanos() / 1_000_000);
+            builder.field("filtered_searches", LanceSearchMetrics.getFilteredSearches());
+            builder.field("pre_filter_searches", LanceSearchMetrics.getPreFilterSearches());
+            builder.field("post_filter_searches", LanceSearchMetrics.getPostFilterSearches());
+            builder.field("search_errors", LanceSearchMetrics.getSearchErrors());
+            builder.endObject();
         }
         builder.endObject();
     }

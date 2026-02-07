@@ -348,6 +348,7 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
         Query filter,
         LanceTimingContext timing
     ) throws IOException {
+        long overallStart = System.nanoTime();
         var reader = context.reader();
         int maxDoc = reader.maxDoc();
 
@@ -466,6 +467,19 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
                 .limit(k)
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
         }
+
+        // Record metrics
+        long duration = System.nanoTime() - overallStart;
+        LanceSearchMetrics.recordSearch(duration);
+        if (filter != null) {
+            LanceSearchMetrics.recordFilteredSearch();
+            if (decision.strategy() == FilterStrategy.PRE_FILTER) {
+                LanceSearchMetrics.recordPreFilterSearch();
+            } else {
+                LanceSearchMetrics.recordPostFilterSearch();
+            }
+        }
+
         return docScores;
     }
 

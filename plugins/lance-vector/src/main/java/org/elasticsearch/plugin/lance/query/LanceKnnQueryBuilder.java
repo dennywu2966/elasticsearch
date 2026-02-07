@@ -113,8 +113,9 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
         LanceVectorFieldType lanceFieldType = (LanceVectorFieldType) fieldType;
         VectorData vectorData = VectorData.fromFloats(queryVector);
 
-        // Call Lance's createKnnQuery with full signature matching DenseVectorFieldType
-        // Lance ignores most of these parameters since it uses external storage
+        String indexName = context.index().getName();
+        int shardId = context.getShardId();
+
         return lanceFieldType.createKnnQuery(
             vectorData,
             k,
@@ -125,7 +126,9 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
             null,  // vectorSimilarity - ignored by Lance
             null,  // parentFilter - ignored by Lance (no nested support)
             null,  // heuristic - ignored by Lance
-            false  // hnswEarlyTermination - ignored by Lance
+            false, // hnswEarlyTermination - ignored by Lance
+            indexName,
+            shardId
         );
     }
 

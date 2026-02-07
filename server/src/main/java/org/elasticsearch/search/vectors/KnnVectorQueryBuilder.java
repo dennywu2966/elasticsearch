@@ -621,19 +621,22 @@ public class KnnVectorQueryBuilder extends AbstractQueryBuilder<KnnVectorQueryBu
                 // Use reflection to call createKnnQuery method on LanceVectorFieldType
                 try {
                     @SuppressWarnings("unchecked")
-                    java.lang.reflect.Method createKnnMethod = fieldType.getClass().getMethod(
-                        "createKnnQuery",
-                        VectorData.class,
-                        int.class,
-                        int.class,
-                        Float.class,
-                        Float.class,
-                        Query.class,
-                        Float.class,
-                        BitSetProducer.class,
-                        DenseVectorFieldMapper.FilterHeuristic.class,
-                        boolean.class
-                    );
+                    java.lang.reflect.Method createKnnMethod = fieldType.getClass()
+                        .getMethod(
+                            "createKnnQuery",
+                            VectorData.class,
+                            int.class,
+                            int.class,
+                            Float.class,
+                            Float.class,
+                            Query.class,
+                            Float.class,
+                            BitSetProducer.class,
+                            DenseVectorFieldMapper.FilterHeuristic.class,
+                            boolean.class,
+                            String.class,
+                            int.class
+                        );
                     return (Query) createKnnMethod.invoke(
                         fieldType,
                         queryVector,
@@ -645,7 +648,9 @@ public class KnnVectorQueryBuilder extends AbstractQueryBuilder<KnnVectorQueryBu
                         vectorSimilarity,
                         parentBitSet,
                         context.getIndexSettings().getHnswFilterHeuristic(),
-                        context.getIndexSettings().getHnswEarlyTermination()
+                        context.getIndexSettings().getHnswEarlyTermination(),
+                        context.index().getName(),
+                        context.getShardId()
                     );
                 } catch (Exception e) {
                     throw new IllegalArgumentException("Failed to create kNN query for lance_vector field: " + e.getMessage(), e);

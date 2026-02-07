@@ -198,8 +198,10 @@ public class LanceVectorFieldMapper extends FieldMapper {
 
         /**
          * Create a kNN query for Lance vector search.
-         * This method is now compatible with the full DenseVectorFieldType.createKnnQuery signature.
-         * Most parameters are ignored because Lance uses external vector storage.
+         * <p>
+         * The first 10 parameters mirror DenseVectorFieldType.createKnnQuery (most are ignored).
+         * The last two ({@code indexName}, {@code shardId}) are Lance-specific and enable
+         * shard-aware URI resolution when the mapping uses uri_prefix + shard_path.
          */
         public Query createKnnQuery(
             VectorData queryVector,
@@ -211,13 +213,15 @@ public class LanceVectorFieldMapper extends FieldMapper {
             Float vectorSimilarity,  // Ignored - Lance uses its own similarity
             org.apache.lucene.search.join.BitSetProducer parentFilter,  // Ignored - Lance doesn't support nested
             DenseVectorFieldMapper.FilterHeuristic heuristic,  // Ignored - Lance uses its own search strategy
-            boolean hnswEarlyTermination  // Ignored - Lance doesn't use HNSW
+            boolean hnswEarlyTermination,  // Ignored - Lance doesn't use HNSW
+            String indexName,
+            int shardId
         ) {
             float[] vector = queryVector.isFloat() ? queryVector.asFloatVector() : toFloat(queryVector.asByteVector());
             if (vector.length != dims) {
                 throw new IllegalArgumentException("query vector dims mismatch expected=" + dims + " got=" + vector.length);
             }
-            return new LanceKnnQuery(name(), storage, "unknown", -1, vector, k, numCands, similarity, filter, dims);
+            return new LanceKnnQuery(name(), storage, indexName, shardId, vector, k, numCands, similarity, filter, dims);
         }
 
         private static float[] toFloat(byte[] bytes) {

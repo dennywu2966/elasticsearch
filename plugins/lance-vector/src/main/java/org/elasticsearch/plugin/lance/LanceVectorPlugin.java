@@ -19,6 +19,7 @@ import org.elasticsearch.common.settings.IndexScopedSettings;
 import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.settings.SettingsFilter;
+import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.features.NodeFeature;
 import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.plugin.lance.mapper.LanceVectorFieldMapper;
@@ -63,6 +64,37 @@ public class LanceVectorPlugin extends Plugin implements MapperPlugin, SearchPlu
         Setting.Property.NodeScope
     );
 
+    /**
+     * Setting to enable automatic Lance dataset refresh for near-real-time updates.
+     * <p>
+     * When enabled, the plugin will periodically check for Lance dataset updates
+     * and reload datasets when manifest changes are detected.
+     * <p>
+     * Default is true.
+     */
+    public static final Setting<Boolean> LANCE_REFRESH_ENABLED = Setting.boolSetting(
+        "lance.refresh.enabled",
+        true,
+        Setting.Property.NodeScope,
+        Setting.Property.Dynamic
+    );
+
+    /**
+     * Interval for checking Lance dataset refresh.
+     * <p>
+     * Controls how often the plugin checks for dataset manifest changes.
+     * Lower values detect changes faster but increase overhead.
+     * <p>
+     * Default is 30 seconds. Minimum is 1 second.
+     */
+    public static final Setting<TimeValue> LANCE_REFRESH_INTERVAL = Setting.timeSetting(
+        "lance.refresh.interval",
+        TimeValue.timeValueSeconds(30),
+        TimeValue.timeValueSeconds(1),
+        Setting.Property.NodeScope,
+        Setting.Property.Dynamic
+    );
+
     private final boolean profilingEnabled;
 
     public LanceVectorPlugin(Settings settings) {
@@ -74,6 +106,8 @@ public class LanceVectorPlugin extends Plugin implements MapperPlugin, SearchPlu
         List<Setting<?>> settings = new ArrayList<>();
         settings.add(LANCE_PROFILING_ENABLED);
         settings.add(PreFilterHeuristic.INDEX_SETTING);
+        settings.add(LANCE_REFRESH_ENABLED);
+        settings.add(LANCE_REFRESH_INTERVAL);
         return settings;
     }
 

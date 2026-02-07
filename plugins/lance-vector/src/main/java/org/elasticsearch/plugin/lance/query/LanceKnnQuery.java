@@ -508,7 +508,7 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
         if (context != null && context.isActive()) {
             Map<String, Object> timing = context.toDebugMap();
             // Log the timing breakdown for debugging
-            logger.info("Lance kNN timing breakdown: {}", timing);
+            logger.debug("Lance kNN timing breakdown: {}", timing);
             return timing;
         }
         return null;

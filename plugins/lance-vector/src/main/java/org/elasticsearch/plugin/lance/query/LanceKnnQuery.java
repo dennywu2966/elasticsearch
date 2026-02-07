@@ -357,13 +357,16 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
         int filteredDocCount = -1;
         if (filter != null) {
             long filterStart = System.nanoTime();
-            org.apache.lucene.search.IndexSearcher searcher = new org.apache.lucene.search.IndexSearcher(reader);
-            org.apache.lucene.search.Weight filterWeight = searcher.createWeight(
-                searcher.rewrite(filter),
+            // Create a searcher for this leaf reader to evaluate the filter
+            org.apache.lucene.search.IndexSearcher leafSearcher = new org.apache.lucene.search.IndexSearcher(reader);
+            org.apache.lucene.search.Weight filterWeight = leafSearcher.createWeight(
+                leafSearcher.rewrite(filter),
                 org.apache.lucene.search.ScoreMode.COMPLETE_NO_SCORES,
                 1.0f
             );
-            org.apache.lucene.search.Scorer filterScorer = filterWeight.scorer(context);
+            // Get the leaf context from the leaf searcher (not the original context)
+            org.apache.lucene.index.LeafReaderContext leafContext = leafSearcher.getIndexReader().leaves().get(0);
+            org.apache.lucene.search.Scorer filterScorer = filterWeight.scorer(leafContext);
             if (filterScorer != null) {
                 filterBits = new java.util.BitSet(maxDoc);
                 org.apache.lucene.search.DocIdSetIterator filterIter = filterScorer.iterator();

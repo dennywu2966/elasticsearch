@@ -14,8 +14,6 @@ import org.apache.arrow.vector.VarCharVector;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.lucene.index.LeafReaderContext;
-import org.apache.lucene.index.PostingsEnum;
-import org.apache.lucene.index.Term;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.search.Explanation;
 import org.apache.lucene.search.IndexSearcher;
@@ -198,23 +196,16 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
             }
 
             LanceDataset dataset;
-            List<LanceDataset.Candidate> candidates;
             try (var timer = new LanceTimer(LanceTimingContext.LanceTimingStage.REGISTRY_CACHE_LOOKUP)) {
                 dataset = LanceDatasetRegistry.getOrLoad(storageUri, dims, config);
-                candidates = dataset.search(queryVector, numCandidates, similarity);
             }
 
-            logger.debug(
-                "Lance KNN: dataset has {} dims, searched with numCandidates={}, got {} candidates",
-                dataset.dims(),
-                numCandidates,
-                candidates.size()
-            );
-            // Store filter query - we'll create the weight per-leaf to handle ES's DFS phase
-            // which may use a different IndexSearcher than the one passed here
+            logger.debug("Lance KNN: dataset has {} dims, numCandidates={}, k={}", dataset.dims(), numCandidates, k);
+            // Store for per-leaf execution
             final Query filterQuery = this.filter;
             final float queryBoost = boost;
             final int topK = k;
+            final LanceDataset capturedDataset = dataset;
             final LanceTimingContext capturedContext = context;  // Capture for cleanup
 
             return new Weight(this) {
@@ -234,15 +225,16 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
 
                 @Override
                 public ScorerSupplier scorerSupplier(LeafReaderContext context) throws IOException {
-                    // Create filter weight using an IndexSearcher from the context's top-level reader
-                    // This is necessary because ES's DFS phase may call scorerSupplier with a context
-                    // from a different top-level reader than the searcher passed to createWeight
-                    Weight filterWeight = null;
-                    if (filterQuery != null) {
-                        IndexSearcher contextSearcher = new IndexSearcher(context.parent);
-                        filterWeight = filterQuery.createWeight(contextSearcher, ScoreMode.COMPLETE_NO_SCORES, 1f);
-                    }
-                    Map<Integer, Float> docScores = buildDocScores(context, candidates, filterWeight, topK);
+                    // Hybrid buildDocScores: filter eval → strategy decision → search → join
+                    Map<Integer, Float> docScores = buildDocScores(
+                        context,
+                        capturedDataset,
+                        queryVector,
+                        topK,
+                        "vector",
+                        filterQuery,
+                        capturedContext
+                    );
                     if (docScores.isEmpty()) {
                         return null;
                     }
@@ -347,68 +339,134 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
         }
     }
 
-    private static Map<Integer, Float> buildDocScores(
+    private Map<Integer, Float> buildDocScores(
         LeafReaderContext context,
-        List<LanceDataset.Candidate> candidates,
-        Weight filterWeight,
-        int k
+        LanceDataset dataset,
+        float[] queryVector,
+        int k,
+        String columnName,
+        Query filter,
+        LanceTimingContext timing
     ) throws IOException {
-        if (candidates.isEmpty()) {
-            return Map.of();
-        }
         var reader = context.reader();
-        var terms = reader.terms(IdFieldMapper.NAME);
-        if (terms == null) {
-            return Map.of();
-        }
-        // Build filter bitset once if filter is present
-        java.util.BitSet filterBitSet = null;
-        if (filterWeight != null) {
-            try (var timer = new LanceTimer(LanceTimingContext.LanceTimingStage.FILTER_PROCESSING)) {
-                ScorerSupplier filterSupplier = filterWeight.scorerSupplier(context);
-                if (filterSupplier != null) {
-                    Scorer filterScorer = filterSupplier.get(1);
-                    filterBitSet = new java.util.BitSet(reader.maxDoc());
-                    DocIdSetIterator filterIter = filterScorer.iterator();
-                    for (int doc = filterIter.nextDoc(); doc != DocIdSetIterator.NO_MORE_DOCS; doc = filterIter.nextDoc()) {
-                        filterBitSet.set(doc);
-                    }
-                } else {
-                    // Filter matched no documents in this segment
-                    return Map.of();
+        int maxDoc = reader.maxDoc();
+
+        // Phase 1: Evaluate filter
+        java.util.BitSet filterBits = null;
+        int filteredDocCount = -1;
+        if (filter != null) {
+            long filterStart = System.nanoTime();
+            org.apache.lucene.search.IndexSearcher searcher = new org.apache.lucene.search.IndexSearcher(reader);
+            org.apache.lucene.search.Weight filterWeight = searcher.createWeight(
+                searcher.rewrite(filter),
+                org.apache.lucene.search.ScoreMode.COMPLETE_NO_SCORES,
+                1.0f
+            );
+            org.apache.lucene.search.Scorer filterScorer = filterWeight.scorer(context);
+            if (filterScorer != null) {
+                filterBits = new java.util.BitSet(maxDoc);
+                org.apache.lucene.search.DocIdSetIterator filterIter = filterScorer.iterator();
+                for (int doc = filterIter.nextDoc(); doc != org.apache.lucene.search.DocIdSetIterator.NO_MORE_DOCS; doc = filterIter
+                    .nextDoc()) {
+                    filterBits.set(doc);
                 }
+                filteredDocCount = filterBits.cardinality();
+            } else {
+                // Filter matches nothing → return empty
+                return java.util.Collections.emptyMap();
+            }
+            if (timing != null) {
+                timing.record(LanceTimingContext.LanceTimingStage.FILTER_PROCESSING, (System.nanoTime() - filterStart) / 1_000_000);
             }
         }
 
-        Map<Integer, Float> scores = new java.util.HashMap<>();
-        try (var timer = new LanceTimer(LanceTimingContext.LanceTimingStage.ID_MATCHING)) {
-            for (LanceDataset.Candidate c : candidates) {
-                BytesRef encodedId = Uid.encodeId(c.id());
-                Term term = new Term(IdFieldMapper.NAME, encodedId);
-                PostingsEnum postings = reader.postings(term);
-                if (postings == null) {
-                    continue;
-                }
-                for (int doc = postings.nextDoc(); doc != DocIdSetIterator.NO_MORE_DOCS; doc = postings.nextDoc()) {
-                    if (filterBitSet != null && filterBitSet.get(doc) == false) {
-                        continue;
+        // Phase 2: Decide strategy
+        PreFilterHeuristic heuristic = PreFilterHeuristic.AUTO; // TODO: read from index settings via SearchExecutionContext
+        FilterDecision decision = decideFilterStrategy(filteredDocCount, k, heuristic);
+
+        logger.debug(
+            "Lance kNN filter decision: strategy={}, filteredDocs={}, k={}, heuristic={}",
+            decision.strategy(),
+            filteredDocCount,
+            k,
+            heuristic
+        );
+
+        // Phase 3: Execute search based on strategy
+        List<LanceDataset.Candidate> results;
+        if (decision.strategy() == FilterStrategy.PRE_FILTER) {
+            // Extract _ids from matching docs, push to Lance as pre-filter
+            long preFilterStart = System.nanoTime();
+            List<String> filteredIds = extractFilteredIds(reader, filterBits, maxDoc);
+            if (timing != null) {
+                timing.record(LanceTimingContext.LanceTimingStage.ID_MATCHING, (System.nanoTime() - preFilterStart) / 1_000_000);
+            }
+
+            long searchStart = System.nanoTime();
+            try (
+                org.apache.arrow.memory.BufferAllocator allocator = new org.apache.arrow.memory.RootAllocator(1024 * 1024);
+                var idVector = createArrowIdVector(filteredIds, allocator)
+            ) {
+                results = dataset.search(queryVector, k, columnName, idVector);
+            }
+            if (timing != null) {
+                timing.record(LanceTimingContext.LanceTimingStage.NATIVE_SEARCH_EXECUTION, (System.nanoTime() - searchStart) / 1_000_000);
+            }
+        } else {
+            // POST_FILTER or NONE - unfiltered Lance search
+            long searchStart = System.nanoTime();
+            results = dataset.search(queryVector, numCandidates, similarity);
+            if (timing != null) {
+                timing.record(LanceTimingContext.LanceTimingStage.NATIVE_SEARCH_EXECUTION, (System.nanoTime() - searchStart) / 1_000_000);
+            }
+        }
+
+        // Phase 4: Map results to Lucene doc IDs
+        long joinStart = System.nanoTime();
+        Map<Integer, Float> docScores = new java.util.HashMap<>();
+        org.apache.lucene.index.Terms terms = reader.terms(IdFieldMapper.NAME);
+        if (terms != null) {
+            org.apache.lucene.index.TermsEnum termsEnum = terms.iterator();
+            org.apache.lucene.index.PostingsEnum postingsEnum = null;
+
+            for (LanceDataset.Candidate candidate : results) {
+                BytesRef encodedId = Uid.encodeId(candidate.id());
+                if (termsEnum.seekExact(encodedId)) {
+                    postingsEnum = termsEnum.postings(postingsEnum, 0);
+                    int docId = postingsEnum.nextDoc();
+                    if (docId != org.apache.lucene.search.DocIdSetIterator.NO_MORE_DOCS) {
+                        // Post-filter: check if doc passes filter
+                        if (decision.strategy() == FilterStrategy.POST_FILTER && filterBits != null) {
+                            if (filterBits.get(docId) == false) {
+                                continue; // Doc doesn't pass filter, skip
+                            }
+                        }
+                        docScores.put(docId, candidate.score());
                     }
-                    scores.merge(doc, c.score(), Math::max);
                 }
             }
         }
+        if (timing != null) {
+            timing.record(LanceTimingContext.LanceTimingStage.SCORE_AGGREGATION, (System.nanoTime() - joinStart) / 1_000_000);
+        }
+
+        logger.debug(
+            "Lance kNN search complete: strategy={}, candidates={}, results={}, filteredDocs={}",
+            decision.strategy(),
+            results.size(),
+            docScores.size(),
+            filteredDocCount
+        );
 
         // Keep only top k by score
-        try (var timer = new LanceTimer(LanceTimingContext.LanceTimingStage.SCORE_AGGREGATION)) {
-            if (scores.size() > k) {
-                return scores.entrySet()
-                    .stream()
-                    .sorted(Map.Entry.<Integer, Float>comparingByValue().reversed())
-                    .limit(k)
-                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-            }
+        if (docScores.size() > k) {
+            return docScores.entrySet()
+                .stream()
+                .sorted(Map.Entry.<Integer, Float>comparingByValue().reversed())
+                .limit(k)
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
         }
-        return scores;
+        return docScores;
     }
 
     @Override

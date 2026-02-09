@@ -102,11 +102,7 @@ public class LanceRefreshService implements Closeable {
 
     private void scheduleNextRefresh() {
         if (running == false) return;
-        scheduledTask = executorService.schedule(
-            this::doRefreshCycle,
-            refreshInterval.millis(),
-            TimeUnit.MILLISECONDS
-        );
+        scheduledTask = executorService.schedule(this::doRefreshCycle, refreshInterval.millis(), TimeUnit.MILLISECONDS);
     }
 
     private void doRefreshCycle() {

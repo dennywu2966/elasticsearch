@@ -18,7 +18,6 @@ import org.elasticsearch.rest.RestResponse;
 import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.xcontent.XContentBuilder;
 
-import java.io.IOException;
 import java.util.List;
 
 /**

@@ -80,4 +80,54 @@ public class LanceStorageConfigTests extends ESTestCase {
         assertThat(config1.uri(), equalTo("file:///path1"));
         assertThat(config2.uri(), equalTo("file:///path2"));
     }
+
+    // --- Tests for ShardingStrategy and numShards ---
+
+    public void testDefaultNumShardsAndShardingStrategy() {
+        LanceStorageConfig config = new LanceStorageConfig("external", "file:///path/to/dataset", "_id", "vector", null, null, null);
+
+        assertThat(config.getNumShards(), equalTo(1)); // Default
+        assertThat(config.getShardingStrategy(), equalTo(LanceStorageConfig.ShardingStrategy.NONE)); // Default for legacy
+    }
+
+    public void testShardAwareConfigDefaultsToEsRouting() {
+        LanceStorageConfig config = new LanceStorageConfig(
+            "external",
+            null,
+            "_id",
+            "vector",
+            null,
+            null,
+            null,
+            "oss://bucket/prod",
+            "{index}/shard-{shard_id}",
+            "vectors.lance",
+            3,
+            null  // Let it default to ES_ROUTING
+        );
+
+        assertThat(config.isShardAware(), equalTo(true));
+        assertThat(config.getNumShards(), equalTo(3));
+        assertThat(config.getShardingStrategy(), equalTo(LanceStorageConfig.ShardingStrategy.ES_ROUTING));
+    }
+
+    public void testExplicitNoneShardingStrategy() {
+        LanceStorageConfig config = new LanceStorageConfig(
+            "external",
+            "oss://bucket/data.lance",
+            "_id",
+            "vector",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            5,
+            LanceStorageConfig.ShardingStrategy.NONE
+        );
+
+        assertThat(config.getShardingStrategy(), equalTo(LanceStorageConfig.ShardingStrategy.NONE));
+        assertThat(config.getNumShards(), equalTo(5));
+    }
 }

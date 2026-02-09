@@ -9,14 +9,19 @@
 
 package org.elasticsearch.plugin.lance.query;
 
+import org.apache.lucene.search.Query;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
 import org.elasticsearch.common.io.stream.NamedWriteableAwareStreamInput;
 import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.index.Index;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.RangeQueryBuilder;
+import org.elasticsearch.index.query.SearchExecutionContext;
 import org.elasticsearch.index.query.TermQueryBuilder;
+import org.elasticsearch.plugin.lance.mapper.LanceStorageConfig;
+import org.elasticsearch.plugin.lance.mapper.LanceVectorFieldMapper.LanceVectorFieldType;
 import org.elasticsearch.search.SearchModule;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.xcontent.NamedXContentRegistry;
@@ -25,10 +30,15 @@ import org.elasticsearch.xcontent.XContentType;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.PrintStream;
+import java.lang.reflect.Field;
 import java.util.List;
 
 import static java.util.Collections.emptyList;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * Tests for {@link LanceKnnQueryBuilder} filter parsing and serialization.
@@ -213,11 +223,64 @@ public class LanceKnnQueryBuilderTests extends ESTestCase {
         assertEquals(1, deserialized.filterQueries().size());
     }
 
+    public void testDoToQueryDoesNotWriteToConsole() throws Exception {
+        LanceKnnQueryBuilder builder = new LanceKnnQueryBuilder("embedding", new float[] { 0.1f, 0.2f, 0.3f }, 5, 20, List.of(), 42);
+
+        SearchExecutionContext context = createSearchExecutionContext("embedding");
+
+        ByteArrayOutputStream stdout = new ByteArrayOutputStream();
+        ByteArrayOutputStream stderr = new ByteArrayOutputStream();
+        PrintStream originalOut = System.out;
+        PrintStream originalErr = System.err;
+        try {
+            System.setOut(new PrintStream(stdout));
+            System.setErr(new PrintStream(stderr));
+            builder.toQuery(context);
+        } finally {
+            System.setOut(originalOut);
+            System.setErr(originalErr);
+        }
+
+        assertEquals("", stdout.toString());
+        assertEquals("", stderr.toString());
+    }
+
+    public void testDoToQueryPropagatesNprobesToQuery() throws Exception {
+        LanceKnnQueryBuilder builder = new LanceKnnQueryBuilder("embedding", new float[] { 0.1f, 0.2f, 0.3f }, 5, 20, List.of(), 42);
+
+        Query query = builder.toQuery(createSearchExecutionContext("embedding"));
+        assertThat(query, org.hamcrest.Matchers.instanceOf(LanceKnnQuery.class));
+
+        Field nprobesField = LanceKnnQuery.class.getDeclaredField("nprobes");
+        nprobesField.setAccessible(true);
+        int nprobes = nprobesField.getInt(query);
+        assertEquals(42, nprobes);
+    }
+
     // -- Helper --
 
     private LanceKnnQueryBuilder parseBuilder(String json) throws IOException {
         XContentParser parser = createParser(XContentType.JSON.xContent(), json);
         parser.nextToken(); // START_OBJECT
         return LanceKnnQueryBuilder.fromXContent(parser);
+    }
+
+    private SearchExecutionContext createSearchExecutionContext(String fieldName) {
+        LanceStorageConfig storage = new LanceStorageConfig(
+            "external",
+            "embedded:org/elasticsearch/plugin/lance/datasets/simple.json",
+            "_id",
+            "vector",
+            null,
+            null,
+            null
+        );
+        LanceVectorFieldType fieldType = new LanceVectorFieldType(fieldName, 3, "cosine", storage);
+
+        SearchExecutionContext context = mock(SearchExecutionContext.class);
+        when(context.getFieldType(fieldName)).thenReturn(fieldType);
+        when(context.getShardId()).thenReturn(0);
+        when(context.index()).thenReturn(new Index("products", "uuid-1"));
+        return context;
     }
 }

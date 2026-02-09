@@ -11,7 +11,11 @@ package org.elasticsearch.plugin.lance;
 
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.core.TimeValue;
+import org.elasticsearch.rest.BaseRestHandler;
+import org.elasticsearch.rest.RestHandler;
 import org.elasticsearch.test.ESTestCase;
+
+import java.util.Collection;
 
 /**
  * Tests for LanceVectorPlugin cluster-level settings.
@@ -38,5 +42,34 @@ public class LanceVectorPluginSettingsTests extends ESTestCase {
     public void testRefreshDisabled() {
         Settings settings = Settings.builder().put("lance.refresh.enabled", false).build();
         assertFalse(LanceVectorPlugin.LANCE_REFRESH_ENABLED.get(settings));
+    }
+
+    public void testRefreshRestHandlerIsRegistered() {
+        LanceVectorPlugin plugin = new LanceVectorPlugin(Settings.EMPTY);
+        try {
+            Collection<RestHandler> handlers = plugin.getRestHandlers(null, null, null, null, null, null, null, null, null);
+            assertEquals(2, handlers.size());
+            assertTrue(containsPath(handlers, "/_lance/stats"));
+            assertTrue(containsPath(handlers, "/_lance/refresh"));
+        } finally {
+            try {
+                plugin.close();
+            } catch (Exception e) {
+                fail("plugin close failed: " + e.getMessage());
+            }
+        }
+    }
+
+    private static boolean containsPath(Collection<RestHandler> handlers, String path) {
+        for (RestHandler handler : handlers) {
+            if (handler instanceof BaseRestHandler base) {
+                for (RestHandler.Route route : base.routes()) {
+                    if (path.equals(route.getPath())) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 }

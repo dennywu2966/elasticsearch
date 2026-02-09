@@ -14,7 +14,6 @@ import org.elasticsearch.test.ESTestCase;
 
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Tests for LanceRefreshService background dataset refresh.

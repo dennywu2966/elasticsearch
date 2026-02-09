@@ -98,6 +98,24 @@ public interface LanceDataset extends Closeable {
     List<Candidate> search(float[] queryVector, int k, String columnName, int nprobes) throws IOException;
 
     /**
+     * Search with SQL filter pushdown.
+     * <p>
+     * This method allows Lance to apply filters BEFORE vector search using native SQL,
+     * significantly reducing the search space for selective filters.
+     * <p>
+     * The sqlFilter parameter is a SQL WHERE clause (without the "WHERE" keyword).
+     * Example: "product_category = 'electronics' AND price &lt; 100"
+     *
+     * @param queryVector The query vector
+     * @param k Number of nearest neighbors
+     * @param columnName The vector column name
+     * @param sqlFilter SQL WHERE clause for pre-filtering (nullable - null means no filter)
+     * @return Search results restricted to rows matching the SQL filter
+     * @throws IOException if search fails
+     */
+    List<Candidate> search(float[] queryVector, int k, String columnName, String sqlFilter) throws IOException;
+
+    /**
      * Get the URI this dataset was loaded from.
      */
     String uri();

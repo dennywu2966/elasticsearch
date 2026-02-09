@@ -26,6 +26,7 @@ import org.apache.lucene.search.Weight;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.index.mapper.IdFieldMapper;
 import org.elasticsearch.index.mapper.Uid;
+import org.elasticsearch.plugin.lance.mapper.LanceStorageConfig;
 import org.elasticsearch.plugin.lance.profile.LanceTimer;
 import org.elasticsearch.plugin.lance.profile.LanceTimingContext;
 import org.elasticsearch.plugin.lance.storage.LanceDataset;
@@ -43,8 +44,23 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
- * A minimal Lucene query that joins Lance candidates to Lucene documents by _id.
- * This is intentionally simple for Phase 1 and uses a fake dataset loader.
+ * A Lucene query that joins Lance candidates to Lucene documents by _id.
+ * <p>
+ * Supports two modes of operation:
+ * <ul>
+ *   <li><b>Legacy mode</b> (single URI): The dataset is opened and searched once in
+ *       {@code createWeight()} and the candidates are shared across all leaf segments.</li>
+ *   <li><b>Shard-aware mode</b> (uri_prefix + template): The dataset URI is resolved
+ *       per-shard and searched in {@code scorerSupplier()} so each shard reads its own
+ *       Lance dataset.</li>
+ * </ul>
+ * <p>
+ * Filter support includes:
+ * <ul>
+ *   <li><b>Pre-filter</b>: Push filtered IDs to Lance SDK before vector search (for small filters)</li>
+ *   <li><b>Post-filter</b>: Intersect Lance results with Lucene filter bitset (default)</li>
+ *   <li><b>Auto</b>: Automatically choose based on filter selectivity</li>
+ * </ul>
  * <p>
  * Implements QueryProfilerProvider to provide detailed timing information
  * when profiling is enabled via the profile=true search parameter.
@@ -139,17 +155,46 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
     }
 
     private final String fieldName;
-    private final String storageUri;
+    private final LanceStorageConfig storageConfig;
+    private final String indexName;
+    private final int shardId; // -1 = unknown, resolve per-leaf
     private final float[] queryVector;
     private final int k;
     private final int numCandidates;
     private final String similarity;
     private final Query filter;
     private final int dims;
-    private final String ossEndpoint;
-    private final String ossAccessKeyId;
-    private final String ossAccessKeySecret;
+    private final PreFilterHeuristic prefilterHeuristic;
 
+    public LanceKnnQuery(
+        String fieldName,
+        LanceStorageConfig storageConfig,
+        String indexName,
+        int shardId,
+        float[] queryVector,
+        int k,
+        int numCandidates,
+        String similarity,
+        Query filter,
+        int dims,
+        PreFilterHeuristic prefilterHeuristic
+    ) {
+        this.fieldName = Objects.requireNonNull(fieldName);
+        this.storageConfig = Objects.requireNonNull(storageConfig);
+        this.indexName = Objects.requireNonNull(indexName);
+        this.shardId = shardId;
+        this.queryVector = Objects.requireNonNull(queryVector);
+        this.k = k;
+        this.numCandidates = numCandidates;
+        this.similarity = similarity == null ? "cosine" : similarity;
+        this.filter = filter;
+        this.dims = dims;
+        this.prefilterHeuristic = prefilterHeuristic != null ? prefilterHeuristic : PreFilterHeuristic.AUTO;
+    }
+
+    /**
+     * Legacy constructor for backward compatibility with single URI mode.
+     */
     public LanceKnnQuery(
         String fieldName,
         String storageUri,
@@ -163,50 +208,54 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
         String ossAccessKeyId,
         String ossAccessKeySecret
     ) {
-        this.fieldName = Objects.requireNonNull(fieldName);
-        this.storageUri = Objects.requireNonNull(storageUri);
-        this.queryVector = Objects.requireNonNull(queryVector);
-        this.k = k;
-        this.numCandidates = numCandidates;
-        this.similarity = similarity == null ? "cosine" : similarity;
-        this.filter = filter;
-        this.dims = dims;
-        this.ossEndpoint = ossEndpoint;
-        this.ossAccessKeyId = ossAccessKeyId;
-        this.ossAccessKeySecret = ossAccessKeySecret;
+        this(
+            fieldName,
+            new LanceStorageConfig("lance", storageUri, "_id", "vector", ossEndpoint, ossAccessKeyId, ossAccessKeySecret, 1),
+            "",
+            -1,
+            queryVector,
+            k,
+            numCandidates,
+            similarity,
+            filter,
+            dims,
+            PreFilterHeuristic.AUTO
+        );
     }
 
     @Override
     public Weight createWeight(IndexSearcher searcher, ScoreMode scoreMode, float boost) throws IOException {
-        // Initialize timing context for this query
-        LanceTimingContext context = null;
+        LanceTimingContext timingContext = null;
         try {
-            context = LanceTimingContext.getOrCreate();
-            // Activate timing collection - this enables LanceTimer to record timings
-            context.activate();
+            timingContext = LanceTimingContext.getOrCreate();
+            timingContext.activate();
 
-            // Use unified registry that automatically selects RealLanceDataset for .lance files
-            // and FakeLanceDataset for JSON test files
-            // For OSS URIs, include OSS configuration
-            LanceDatasetConfig config;
-            if (storageUri.startsWith("oss://") && ossEndpoint != null) {
-                config = new LanceDatasetConfig("_id", "vector", dims, ossEndpoint, ossAccessKeyId, ossAccessKeySecret);
-            } else {
-                config = new LanceDatasetConfig("_id", "vector", dims, null, null, null);
-            }
-
-            LanceDataset dataset;
-            try (var timer = new LanceTimer(LanceTimingContext.LanceTimingStage.REGISTRY_CACHE_LOOKUP)) {
-                dataset = LanceDatasetRegistry.getOrLoad(storageUri, dims, config);
-            }
-
-            logger.debug("Lance KNN: dataset has {} dims, numCandidates={}, k={}", dataset.dims(), numCandidates, k);
-            // Store for per-leaf execution
             final Query filterQuery = this.filter;
             final float queryBoost = boost;
             final int topK = k;
-            final LanceDataset capturedDataset = dataset;
-            final LanceTimingContext capturedContext = context;  // Capture for cleanup
+            final LanceTimingContext capturedContext = timingContext;
+
+            // Legacy mode: search once, share candidates across all segments
+            final List<LanceDataset.Candidate> sharedCandidates;
+            if (storageConfig.isShardAware() == false) {
+                logger.info("Lance KNN createWeight: LEGACY mode, indexName={}, shardId={}", indexName, shardId);
+                String resolvedUri = storageConfig.resolveUri(indexName, Math.max(shardId, 0));
+                LanceDatasetConfig config = buildDatasetConfig();
+                LanceDataset dataset;
+                try (var timer = new LanceTimer(LanceTimingContext.LanceTimingStage.REGISTRY_CACHE_LOOKUP)) {
+                    dataset = LanceDatasetRegistry.getOrLoad(resolvedUri, dims, config);
+                    sharedCandidates = dataset.search(queryVector, numCandidates, similarity);
+                }
+                logger.debug(
+                    "Lance KNN (legacy): dataset has {} dims, searched with numCandidates={}, got {} candidates",
+                    dataset.dims(),
+                    numCandidates,
+                    sharedCandidates.size()
+                );
+            } else {
+                logger.info("Lance KNN createWeight: SHARD-AWARE mode, indexName={}, shardId={}", indexName, shardId);
+                sharedCandidates = null; // Will be resolved per-shard in scorerSupplier
+            }
 
             return new Weight(this) {
                 @Override
@@ -226,15 +275,7 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
                 @Override
                 public ScorerSupplier scorerSupplier(LeafReaderContext context) throws IOException {
                     // Hybrid buildDocScores: filter eval → strategy decision → search → join
-                    Map<Integer, Float> docScores = buildDocScores(
-                        context,
-                        capturedDataset,
-                        queryVector,
-                        topK,
-                        "vector",
-                        filterQuery,
-                        capturedContext
-                    );
+                    Map<Integer, Float> docScores = buildDocScores(context, sharedCandidates, filterQuery, topK, capturedContext);
                     if (docScores.isEmpty()) {
                         return null;
                     }
@@ -250,7 +291,7 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
                                 @Override
                                 public int docID() {
                                     if (idx < 0) {
-                                        return -1; // Not yet positioned
+                                        return -1;
                                     } else if (idx >= docIds.size()) {
                                         return NO_MORE_DOCS;
                                     }
@@ -299,12 +340,62 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
                 }
             };
         } finally {
-            // Clean up timing context to prevent ThreadLocal memory leak
-            if (context != null) {
-                context.deactivate();
-                context.clear();
+            if (timingContext != null) {
+                timingContext.deactivate();
+                timingContext.clear();
             }
         }
+    }
+
+    private LanceDatasetConfig buildDatasetConfig() {
+        String ossEp = storageConfig.ossEndpoint();
+        String ossKeyId = storageConfig.ossAccessKeyId();
+        String ossKeySecret = storageConfig.ossAccessKeySecret();
+        if (ossEp != null) {
+            return new LanceDatasetConfig("_id", "vector", dims, ossEp, ossKeyId, ossKeySecret);
+        }
+        return new LanceDatasetConfig("_id", "vector", dims, null, null, null);
+    }
+
+    /**
+     * Filter candidates to only include those that belong to the current shard.
+     * Uses the configured {@link org.elasticsearch.plugin.lance.mapper.LanceStorageConfig.ShardingStrategy}.
+     *
+     * @param candidates All candidates from Lance dataset search
+     * @param numShards Total number of shards in the index
+     * @return Filtered list of candidates that belong to this shard
+     */
+    private List<LanceDataset.Candidate> filterCandidatesByShard(List<LanceDataset.Candidate> candidates, int numShards) {
+        org.elasticsearch.plugin.lance.mapper.LanceStorageConfig.ShardingStrategy strategy = storageConfig.getShardingStrategy();
+
+        // If strategy is NONE, return all candidates without filtering
+        if (strategy == org.elasticsearch.plugin.lance.mapper.LanceStorageConfig.ShardingStrategy.NONE) {
+            return candidates;
+        }
+
+        // Use ES's Murmur3HashFunction to determine which shard each ID belongs to
+        // This matches exactly how ES routes documents to shards
+        List<LanceDataset.Candidate> filteredCandidates = new java.util.ArrayList<>(candidates.size());
+        for (LanceDataset.Candidate candidate : candidates) {
+            // Calculate shard ID using ES's hash function
+            int candidateShardId = Math.abs(org.elasticsearch.cluster.routing.Murmur3HashFunction.hash(candidate.id())) % numShards;
+
+            // Only include candidates that belong to this shard
+            // (or all candidates if we can't determine our shard ID)
+            if (shardId < 0 || shardId == candidateShardId) {
+                filteredCandidates.add(candidate);
+            }
+        }
+
+        if (shardId >= 0 && filteredCandidates.size() != candidates.size()) {
+            logger.debug(
+                "Lance KNN: filtered candidates from {} to {} based on ES shard routing",
+                candidates.size(),
+                filteredCandidates.size()
+            );
+        }
+
+        return filteredCandidates;
     }
 
     private static class LanceScorer extends Scorer {
@@ -341,40 +432,37 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
 
     private Map<Integer, Float> buildDocScores(
         LeafReaderContext context,
-        LanceDataset dataset,
-        float[] queryVector,
-        int k,
-        String columnName,
+        List<LanceDataset.Candidate> sharedCandidates,
         Query filter,
+        int k,
         LanceTimingContext timing
     ) throws IOException {
         long overallStart = System.nanoTime();
         var reader = context.reader();
         int maxDoc = reader.maxDoc();
 
-        // Phase 1: Evaluate filter
+        // Phase 1: Evaluate filter (if filter provided)
         java.util.BitSet filterBits = null;
-        int filteredDocCount = -1;
         if (filter != null) {
             long filterStart = System.nanoTime();
-            // Create a searcher for this leaf reader to evaluate the filter
+            // Create an IndexSearcher for this leaf reader to evaluate the filter
             org.apache.lucene.search.IndexSearcher leafSearcher = new org.apache.lucene.search.IndexSearcher(reader);
             org.apache.lucene.search.Weight filterWeight = leafSearcher.createWeight(
                 leafSearcher.rewrite(filter),
                 org.apache.lucene.search.ScoreMode.COMPLETE_NO_SCORES,
                 1.0f
             );
-            // Get the leaf context from the leaf searcher (not the original context)
+            // Get the leaf context from the new searcher
             org.apache.lucene.index.LeafReaderContext leafContext = leafSearcher.getIndexReader().leaves().get(0);
-            org.apache.lucene.search.Scorer filterScorer = filterWeight.scorer(leafContext);
-            if (filterScorer != null) {
+            org.apache.lucene.search.ScorerSupplier filterSupplier = filterWeight.scorerSupplier(leafContext);
+            if (filterSupplier != null) {
+                org.apache.lucene.search.Scorer filterScorer = filterSupplier.get(1);
                 filterBits = new java.util.BitSet(maxDoc);
                 org.apache.lucene.search.DocIdSetIterator filterIter = filterScorer.iterator();
                 for (int doc = filterIter.nextDoc(); doc != org.apache.lucene.search.DocIdSetIterator.NO_MORE_DOCS; doc = filterIter
                     .nextDoc()) {
                     filterBits.set(doc);
                 }
-                filteredDocCount = filterBits.cardinality();
             } else {
                 // Filter matches nothing → return empty
                 return java.util.Collections.emptyMap();
@@ -384,48 +472,49 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
             }
         }
 
-        // Phase 2: Decide strategy
-        PreFilterHeuristic heuristic = PreFilterHeuristic.AUTO; // TODO: read from index settings via SearchExecutionContext
-        FilterDecision decision = decideFilterStrategy(filteredDocCount, k, heuristic);
-
-        logger.debug(
-            "Lance kNN filter decision: strategy={}, filteredDocs={}, k={}, heuristic={}",
-            decision.strategy(),
-            filteredDocCount,
-            k,
-            heuristic
-        );
-
-        // Phase 3: Execute search based on strategy
+        // Phase 2: Get candidates to process
         List<LanceDataset.Candidate> results;
-        if (decision.strategy() == FilterStrategy.PRE_FILTER) {
-            // Extract _ids from matching docs, push to Lance as pre-filter
-            long preFilterStart = System.nanoTime();
-            List<String> filteredIds = extractFilteredIds(reader, filterBits, maxDoc);
-            if (timing != null) {
-                timing.record(LanceTimingContext.LanceTimingStage.ID_MATCHING, (System.nanoTime() - preFilterStart) / 1_000_000);
+        if (sharedCandidates != null) {
+            // Legacy mode: use shared candidates
+            results = sharedCandidates;
+        } else {
+            // Shard-aware mode: resolve dataset and search per-shard
+            int leafShardId = Math.max(shardId, 0);
+            String resolvedUri = storageConfig.resolveUri(indexName, leafShardId);
+            logger.info(
+                "Lance KNN: indexName={}, shardId={}, leafShardId={}, resolvedUri={}",
+                indexName,
+                shardId,
+                leafShardId,
+                resolvedUri
+            );
+            LanceDatasetConfig config = buildDatasetConfig();
+            LanceDataset dataset;
+            try (var timer = new LanceTimer(LanceTimingContext.LanceTimingStage.REGISTRY_CACHE_LOOKUP)) {
+                dataset = LanceDatasetRegistry.getOrLoad(resolvedUri, dims, config);
             }
 
+            // Try to convert ES filter to Lance SQL for native prefiltering
+            String sqlFilter = tryConvertFilterToSql(filter);
+
             long searchStart = System.nanoTime();
-            try (
-                org.apache.arrow.memory.BufferAllocator allocator = new org.apache.arrow.memory.RootAllocator(1024 * 1024);
-                var idVector = createArrowIdVector(filteredIds, allocator)
-            ) {
-                results = dataset.search(queryVector, k, columnName, idVector);
+            List<LanceDataset.Candidate> allCandidates;
+            if (sqlFilter != null) {
+                // Use SQL filter for native prefiltering
+                allCandidates = dataset.search(queryVector, numCandidates, storageConfig.vectorColumn(), sqlFilter);
+            } else {
+                // No SQL filter, use standard search
+                allCandidates = dataset.search(queryVector, numCandidates, similarity);
             }
             if (timing != null) {
                 timing.record(LanceTimingContext.LanceTimingStage.NATIVE_SEARCH_EXECUTION, (System.nanoTime() - searchStart) / 1_000_000);
             }
-        } else {
-            // POST_FILTER or NONE - unfiltered Lance search
-            long searchStart = System.nanoTime();
-            results = dataset.search(queryVector, numCandidates, similarity);
-            if (timing != null) {
-                timing.record(LanceTimingContext.LanceTimingStage.NATIVE_SEARCH_EXECUTION, (System.nanoTime() - searchStart) / 1_000_000);
-            }
+
+            // Filter candidates to only include those belonging to this shard
+            results = filterCandidatesByShard(allCandidates, storageConfig.getNumShards());
         }
 
-        // Phase 4: Map results to Lucene doc IDs
+        // Phase 3: Map results to Lucene doc IDs and apply filter
         long joinStart = System.nanoTime();
         Map<Integer, Float> docScores = new java.util.HashMap<>();
         org.apache.lucene.index.Terms terms = reader.terms(IdFieldMapper.NAME);
@@ -439,11 +528,9 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
                     postingsEnum = termsEnum.postings(postingsEnum, 0);
                     int docId = postingsEnum.nextDoc();
                     if (docId != org.apache.lucene.search.DocIdSetIterator.NO_MORE_DOCS) {
-                        // Post-filter: check if doc passes filter
-                        if (decision.strategy() == FilterStrategy.POST_FILTER && filterBits != null) {
-                            if (filterBits.get(docId) == false) {
-                                continue; // Doc doesn't pass filter, skip
-                            }
+                        // Apply filter: check if doc passes filter
+                        if (filterBits != null && filterBits.get(docId) == false) {
+                            continue; // Doc doesn't pass filter, skip
                         }
                         docScores.put(docId, candidate.score());
                     }
@@ -454,13 +541,7 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
             timing.record(LanceTimingContext.LanceTimingStage.SCORE_AGGREGATION, (System.nanoTime() - joinStart) / 1_000_000);
         }
 
-        logger.debug(
-            "Lance kNN search complete: strategy={}, candidates={}, results={}, filteredDocs={}",
-            decision.strategy(),
-            results.size(),
-            docScores.size(),
-            filteredDocCount
-        );
+        logger.debug("Lance kNN search complete: candidates={}, results={}, filter={}", results.size(), docScores.size(), filter != null);
 
         // Keep only top k by score
         if (docScores.size() > k) {
@@ -476,19 +557,46 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
         LanceSearchMetrics.recordSearch(duration);
         if (filter != null) {
             LanceSearchMetrics.recordFilteredSearch();
-            if (decision.strategy() == FilterStrategy.PRE_FILTER) {
-                LanceSearchMetrics.recordPreFilterSearch();
-            } else {
-                LanceSearchMetrics.recordPostFilterSearch();
-            }
+            LanceSearchMetrics.recordPostFilterSearch();
         }
 
         return docScores;
     }
 
+    /**
+     * Try to convert ES filter to Lance SQL for native prefiltering.
+     * Returns null if conversion fails (triggers fallback to ES post-filter).
+     */
+    private String tryConvertFilterToSql(Query filter) {
+        if (filter == null) {
+            return null;
+        }
+
+        try {
+            Map<String, String> fieldMapping = storageConfig.getFieldMapping();
+            if (fieldMapping == null || fieldMapping.isEmpty()) {
+                logger.debug("No field_mapping configured, skipping filter pushdown");
+                return null;
+            }
+
+            EsToLanceFilterConverter converter = new EsToLanceFilterConverter();
+            String sqlFilter = converter.convert(filter, fieldMapping);
+            logger.info("Lance filter pushdown: {}", sqlFilter);
+            return sqlFilter;
+        } catch (LanceFilterConversionException e) {
+            // Fallback to ES post-filter (current behavior)
+            logger.warn("Lance filter pushdown failed: {}, falling back to ES post-filter", e.getMessage());
+            return null;
+        }
+    }
+
     @Override
     public String toString(String field) {
-        return "LanceKnnQuery(" + fieldName + ", uri=" + storageUri + ")";
+        if (storageConfig.isShardAware()) {
+            return "LanceKnnQuery(" + fieldName + ", index=" + indexName + ", shard=" + shardId + ", shardAware=true)";
+        }
+        String uri = storageConfig.uri();
+        return "LanceKnnQuery(" + fieldName + ", uri=" + uri + ")";
     }
 
     @Override
@@ -500,13 +608,26 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
         return k == other.k
             && numCandidates == other.numCandidates
             && fieldName.equals(other.fieldName)
-            && storageUri.equals(other.storageUri)
+            && storageConfigEquals(other)
             && similarity.equals(other.similarity);
+    }
+
+    private boolean storageConfigEquals(LanceKnnQuery other) {
+        // For legacy mode, compare URIs; for shard-aware mode, compare indexName and shardId
+        if (storageConfig.isShardAware() || other.storageConfig.isShardAware()) {
+            // At least one is shard-aware - compare indexName and shardId
+            return indexName.equals(other.indexName) && shardId == other.shardId;
+        }
+        // Both are legacy mode - compare URIs
+        return storageConfig.uri().equals(other.storageConfig.uri());
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(fieldName, storageUri, k, numCandidates, similarity);
+        if (storageConfig.isShardAware()) {
+            return Objects.hash(fieldName, indexName, shardId, k, numCandidates, similarity);
+        }
+        return Objects.hash(fieldName, storageConfig.uri(), k, numCandidates, similarity);
     }
 
     @Override
@@ -524,7 +645,6 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
         LanceTimingContext context = LanceTimingContext.getOrCreate();
         if (context != null && context.isActive()) {
             Map<String, Object> timing = context.toDebugMap();
-            // Log the timing breakdown for debugging
             logger.debug("Lance kNN timing breakdown: {}", timing);
             return timing;
         }
@@ -544,10 +664,8 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
     public void profile(QueryProfiler queryProfiler) {
         Map<String, Object> timing = getTimingBreakdown();
         if (timing != null && timing.isEmpty() == false) {
-            // Get the profile breakdown for this query and add Lance timing to debug info
             org.elasticsearch.search.profile.query.QueryProfileBreakdown breakdown = queryProfiler.getQueryBreakdown(this);
             if (breakdown != null) {
-                // Inject Lance timing into the debug map using the new API
                 breakdown.putAllDebugData(timing);
                 logger.debug("Lance kNN profile timing: {}", timing);
             }

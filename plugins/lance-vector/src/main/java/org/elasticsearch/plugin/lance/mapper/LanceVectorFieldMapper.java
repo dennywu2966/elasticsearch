@@ -24,11 +24,13 @@ import org.elasticsearch.index.mapper.ValueFetcher;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import org.elasticsearch.index.query.SearchExecutionContext;
 import org.elasticsearch.plugin.lance.query.LanceKnnQuery;
+import org.elasticsearch.plugin.lance.query.PreFilterHeuristic;
 import org.elasticsearch.search.vectors.VectorData;
 import org.elasticsearch.xcontent.XContentBuilder;
 
 import java.io.IOException;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 
 public class LanceVectorFieldMapper extends FieldMapper {
@@ -96,42 +98,25 @@ public class LanceVectorFieldMapper extends FieldMapper {
                 type = typeObj.toString();
             }
 
-            Object uriObj = storage.get("uri");
-            if (uriObj == null) {
-                throw new MapperParsingException("[storage.uri] is required for lance_vector");
-            }
-            String uri = uriObj.toString();
+            // Shard-aware fields (optional, takes precedence over uri)
+            String uriPrefix = getStringOrNull(storage, "uri_prefix");
+            String shardPath = getStringOrNull(storage, "shard_path");
+            String datasetName = getStringOrNull(storage, "dataset_name");
 
-            String idColumn = "_id";
-            Object idColObj = storage.get("lance_id_column");
-            if (idColObj != null) {
-                idColumn = idColObj.toString();
+            // Legacy single URI (required unless uri_prefix is present)
+            String uri = getStringOrNull(storage, "uri");
+
+            if (uriPrefix == null && uri == null) {
+                throw new MapperParsingException("Either [storage.uri] or [storage.uri_prefix] is required for lance_vector");
             }
 
-            String vectorColumn = "vector";
-            Object vecColObj = storage.get("lance_vector_column");
-            if (vecColObj != null) {
-                vectorColumn = vecColObj.toString();
-            }
+            String idColumn = getStringOrDefault(storage, "lance_id_column", "_id");
+            String vectorColumn = getStringOrDefault(storage, "lance_vector_column", "vector");
 
             // OSS configuration (optional)
-            String ossEndpoint = null;
-            Object ossEndpointObj = storage.get("oss_endpoint");
-            if (ossEndpointObj != null) {
-                ossEndpoint = ossEndpointObj.toString();
-            }
-
-            String ossAccessKeyId = null;
-            Object ossAccessKeyIdObj = storage.get("oss_access_key_id");
-            if (ossAccessKeyIdObj != null) {
-                ossAccessKeyId = ossAccessKeyIdObj.toString();
-            }
-
-            String ossAccessKeySecret = null;
-            Object ossAccessKeySecretObj = storage.get("oss_access_key_secret");
-            if (ossAccessKeySecretObj != null) {
-                ossAccessKeySecret = ossAccessKeySecretObj.toString();
-            }
+            String ossEndpoint = getStringOrNull(storage, "oss_endpoint");
+            String ossAccessKeyId = getStringOrNull(storage, "oss_access_key_id");
+            String ossAccessKeySecret = getStringOrNull(storage, "oss_access_key_secret");
 
             boolean readOnly = true;
             Object readOnlyObj = storage.get("read_only");
@@ -143,6 +128,32 @@ public class LanceVectorFieldMapper extends FieldMapper {
                 throw new MapperParsingException("Phase 1 lance_vector supports only read_only external datasets");
             }
 
+            // Get number of shards from index settings for candidate filtering
+            int numShards = parserContext.getIndexSettings().getNumberOfShards();
+
+            // Parse sharding strategy (optional, defaults to ES_ROUTING for shard-aware configs)
+            LanceStorageConfig.ShardingStrategy shardingStrategy = LanceStorageConfig.ShardingStrategy.ES_ROUTING;
+            Object shardingStrategyObj = storage.get("sharding_strategy");
+            if (shardingStrategyObj != null) {
+                String strategyStr = shardingStrategyObj.toString().toUpperCase();
+                try {
+                    shardingStrategy = LanceStorageConfig.ShardingStrategy.valueOf(strategyStr);
+                } catch (IllegalArgumentException e) {
+                    throw new MapperParsingException(
+                        "Invalid sharding_strategy [" + strategyStr + "]. " + "Valid values: NONE, ES_ROUTING"
+                    );
+                }
+            }
+
+            // Parse field_mapping for native filter pushdown (optional)
+            // Format: "es_field1=lance_column1,es_field2=lance_column2"
+            Map<String, String> fieldMapping = null;
+            Object fieldMappingObj = storage.get("field_mapping");
+            if (fieldMappingObj != null) {
+                String fieldMappingStr = fieldMappingObj.toString();
+                fieldMapping = parseFieldMapping(fieldMappingStr);
+            }
+
             LanceStorageConfig storageConfig = new LanceStorageConfig(
                 type,
                 uri,
@@ -150,9 +161,66 @@ public class LanceVectorFieldMapper extends FieldMapper {
                 vectorColumn,
                 ossEndpoint,
                 ossAccessKeyId,
-                ossAccessKeySecret
+                ossAccessKeySecret,
+                uriPrefix,
+                shardPath,
+                datasetName,
+                numShards,
+                shardingStrategy,
+                fieldMapping
             );
             return new Builder(name, dims, similarity, storageConfig, parserContext.getIndexSettings().getIndexVersionCreated());
+        }
+
+        /**
+         * Parse field_mapping string into a Map.
+         * <p>
+         * Format: "es_field1=lance_column1,es_field2=lance_column2"
+         * <p>
+         * Example: "category=product_category,brand=brand_name"
+         *
+         * @param fieldMappingStr The field mapping string
+         * @return Map of ES field names to Lance column names
+         * @throws MapperParsingException if the format is invalid
+         */
+        private Map<String, String> parseFieldMapping(String fieldMappingStr) throws MapperParsingException {
+            Map<String, String> mapping = new HashMap<>();
+            if (fieldMappingStr == null || fieldMappingStr.trim().isEmpty()) {
+                return mapping;
+            }
+
+            String[] pairs = fieldMappingStr.split(",");
+            for (String pair : pairs) {
+                String[] keyValue = pair.split("=", 2);
+                if (keyValue.length != 2) {
+                    throw new MapperParsingException(
+                        "Invalid field_mapping format: [" + pair + "]. " + "Expected format: es_field=lance_column (comma-separated pairs)"
+                    );
+                }
+                String esField = keyValue[0].trim();
+                String lanceColumn = keyValue[1].trim();
+                if (esField.isEmpty() || lanceColumn.isEmpty()) {
+                    throw new MapperParsingException("Invalid field_mapping: empty field or column name in [" + pair + "]");
+                }
+                mapping.put(esField, lanceColumn);
+            }
+            return mapping;
+        }
+
+        /**
+         * Get string value from map or null if not present.
+         */
+        private String getStringOrNull(Map<String, Object> map, String key) {
+            Object value = map.get(key);
+            return value != null ? value.toString() : null;
+        }
+
+        /**
+         * Get string value from map or default if not present.
+         */
+        private String getStringOrDefault(Map<String, Object> map, String key, String defaultValue) {
+            Object value = map.get(key);
+            return value != null ? value.toString() : defaultValue;
         }
     };
 
@@ -184,10 +252,14 @@ public class LanceVectorFieldMapper extends FieldMapper {
         }
 
         /**
-         * Create a kNN query for Lance vector search.
-         * This method is now compatible with the full DenseVectorFieldType.createKnnQuery signature.
-         * Most parameters are ignored because Lance uses external vector storage.
+         * Create a kNN query for Lance vector search (10-parameter version for ES framework compatibility).
+         * <p>
+         * This method is called by Elasticsearch core via reflection.
+         * Uses default values for indexName and shardId.
+         *
+         * @deprecated Use {@link #createKnnQuery(VectorData, int, int, Float, Float, Query, Float, BitSetProducer, FilterHeuristic, boolean, String, int)} instead.
          */
+        @Deprecated
         public Query createKnnQuery(
             VectorData queryVector,
             int k,
@@ -200,22 +272,74 @@ public class LanceVectorFieldMapper extends FieldMapper {
             DenseVectorFieldMapper.FilterHeuristic heuristic,  // Ignored - Lance uses its own search strategy
             boolean hnswEarlyTermination  // Ignored - Lance doesn't use HNSW
         ) {
+            return createKnnQuery(
+                queryVector,
+                k,
+                numCands,
+                visitPercentage,
+                oversample,
+                filter,
+                vectorSimilarity,
+                parentFilter,
+                heuristic,
+                hnswEarlyTermination,
+                "",
+                -1
+            );
+        }
+
+        /**
+         * Create a kNN query for Lance vector search.
+         * <p>
+         * Supports both legacy single-URI mode and shard-aware mode with uri_prefix.
+         * The first 10 parameters mirror DenseVectorFieldType.createKnnQuery (most are ignored).
+         * The last two ({@code indexName}, {@code shardId}) enable shard-aware URI resolution.
+         *
+         * @param queryVector The query vector
+         * @param k Number of nearest neighbors to return
+         * @param numCands Number of candidates to fetch from Lance
+         * @param visitPercentage Ignored - Lance doesn't use this
+         * @param oversample Ignored - Lance doesn't use this
+         * @param filter Optional Lucene filter to apply
+         * @param vectorSimilarity Ignored - Lance uses its own similarity
+         * @param parentFilter Ignored - Lance doesn't support nested
+         * @param heuristic Ignored - Lance uses its own PreFilterHeuristic
+         * @param hnswEarlyTermination Ignored - Lance doesn't use HNSW
+         * @param indexName Index name for shard-aware URI resolution
+         * @param shardId Shard ID for shard-aware URI resolution (-1 if unknown)
+         */
+        public Query createKnnQuery(
+            VectorData queryVector,
+            int k,
+            int numCands,
+            Float visitPercentage,  // Ignored - Lance doesn't use this
+            Float oversample,  // Ignored - Lance doesn't use this
+            Query filter,
+            Float vectorSimilarity,  // Ignored - Lance uses its own similarity
+            org.apache.lucene.search.join.BitSetProducer parentFilter,  // Ignored - Lance doesn't support nested
+            DenseVectorFieldMapper.FilterHeuristic heuristic,  // Ignored - Lance uses its own search strategy
+            boolean hnswEarlyTermination,  // Ignored - Lance doesn't use HNSW
+            String indexName,
+            int shardId
+        ) {
             float[] vector = queryVector.isFloat() ? queryVector.asFloatVector() : toFloat(queryVector.asByteVector());
             if (vector.length != dims) {
                 throw new IllegalArgumentException("query vector dims mismatch expected=" + dims + " got=" + vector.length);
             }
+            // Use PreFilterHeuristic.AUTO as default; can be made configurable via index settings in the future
+            PreFilterHeuristic prefilterHeuristic = PreFilterHeuristic.AUTO;
             return new LanceKnnQuery(
                 name(),
-                storage.uri(),
+                storage,
+                indexName,
+                shardId,
                 vector,
                 k,
                 numCands,
                 similarity,
                 filter,
                 dims,
-                storage.ossEndpoint(),
-                storage.ossAccessKeyId(),
-                storage.ossAccessKeySecret()
+                prefilterHeuristic
             );
         }
 
@@ -276,7 +400,17 @@ public class LanceVectorFieldMapper extends FieldMapper {
         builder.field(SIMILARITY_FIELD, ft.similarity);
         builder.startObject(STORAGE_FIELD);
         builder.field("type", ft.storage.type());
-        builder.field("uri", ft.storage.uri());
+        if (ft.storage.isShardAware()) {
+            builder.field("uri_prefix", ft.storage.uriPrefix());
+            if (ft.storage.shardPath() != null) {
+                builder.field("shard_path", ft.storage.shardPath());
+            }
+            if (ft.storage.datasetName() != null) {
+                builder.field("dataset_name", ft.storage.datasetName());
+            }
+        } else {
+            builder.field("uri", ft.storage.uri());
+        }
         builder.field("lance_id_column", ft.storage.idColumn());
         builder.field("lance_vector_column", ft.storage.vectorColumn());
         builder.field("read_only", true);

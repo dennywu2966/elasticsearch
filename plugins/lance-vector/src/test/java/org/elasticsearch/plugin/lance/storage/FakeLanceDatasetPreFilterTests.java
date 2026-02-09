@@ -46,7 +46,8 @@ public class FakeLanceDatasetPreFilterTests extends ESTestCase {
     public void testSearchWithNullFilterReturnsAllResults() throws Exception {
         // null filter should delegate to unfiltered search
         FakeLanceDataset dataset = createTestDataset();
-        List<LanceDataset.Candidate> results = dataset.search(new float[] { 0.1f, 0.2f, 0.3f }, 5, "vector", null);
+        // Explicitly cast to VarCharVector to resolve ambiguity
+        List<LanceDataset.Candidate> results = dataset.search(new float[] { 0.1f, 0.2f, 0.3f }, 5, "vector", (VarCharVector) null);
         assertNotNull(results);
         // Should get results (depends on test data)
         assertTrue("Should return some results", results.size() >= 0);

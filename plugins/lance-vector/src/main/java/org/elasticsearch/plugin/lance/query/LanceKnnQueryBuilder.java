@@ -195,6 +195,9 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
         // Build combined filter from filterQueries
         Query filter = buildFilterQuery(context);
 
+        int shardId = context.getShardId();
+        String indexName = context.index().getName();
+
         return lanceFieldType.createKnnQuery(
             vectorData,
             k,
@@ -205,7 +208,9 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
             null,  // vectorSimilarity - ignored by Lance
             null,  // parentFilter - ignored by Lance (no nested support)
             null,  // heuristic - ignored by Lance
-            false  // hnswEarlyTermination - ignored by Lance
+            false,  // hnswEarlyTermination - ignored by Lance
+            indexName,  // indexName for shard-aware URI resolution
+            shardId  // shardId for shard-aware URI resolution
         );
     }
 

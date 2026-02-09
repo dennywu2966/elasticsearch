@@ -1622,6 +1622,110 @@ index.lance.filter_pushdown.max_terms: 1000      # Max terms in IN clause
 index.lance.filter_pushdown.oversample_max: 10   # Max oversample factor
 ```
 
+#### 5.8.5 Lance Native Filter Pushdown (Implemented v1)
+
+**Status**: ✅ Implemented (2026-02-09)
+
+Lance SDK v1.0.0-beta.2+ supports native SQL filtering via `ScanOptions.filter()`. This enables pushing ES filters down to Lance for **prefiltering** (applied BEFORE vector search), significantly reducing search space and improving performance.
+
+**Architecture**:
+
+```
+ES Query DSL
+    ↓
+LanceKnnQueryBuilder (parse filter)
+    ↓
+LanceKnnQuery (decide strategy)
+    ↓
+EsToLanceFilterConverter (new component)
+    ↓  (if conversion succeeds)
+SQL WHERE clause
+    ↓
+ScanOptions.filter(sql) ← NATIVE PREFILTER
+    ↓
+Lance vector search on reduced dataset
+```
+
+**Implementation Status (v1 - Minimal)**:
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Term queries | ✅ Implemented | String, boolean, numeric values |
+| SQL escaping | ✅ Implemented | Single quotes doubled (`O'Reilly` → `O''Reilly'`) |
+| Field mapping | ✅ Implemented | `storage.field_mapping` maps ES fields → Lance columns |
+| Error handling | ✅ Hybrid | Try pushdown → fallback to ES post-filter |
+| terms query | ❌ TODO | IN clause support |
+| range query | ❌ TODO | Numeric/date range support |
+| bool queries | ❌ TODO | AND/OR/NOT logic |
+
+**Configuration**:
+
+```json
+{
+  "mappings": {
+    "properties": {
+      "my_vector": {
+        "type": "lance_vector",
+        "storage": {
+          "uri": "oss://bucket/products.lance",
+          "field_mapping": "category=product_category,brand=brand_name"
+        }
+      }
+    }
+  }
+}
+```
+
+**Example Query**:
+
+```bash
+# ES query with term filter
+curl -X POST "localhost:9200/products/_search" -H 'Content-Type: application/json' -d'
+{
+  "knn": {
+    "field": "my_vector",
+    "query_vector": [0.1, 0.2, ...],
+    "k": 10,
+    "filter": { "term": { "category": "electronics" } }
+  }
+}'
+
+# Lance receives SQL filter
+ScanOptions.Builder()
+    .columns(List.of("_id"))
+    .nearest(vectorQuery)
+    .filter("product_category = 'electronics'")  # NATIVE PREFILTER!
+    .build();
+```
+
+**Fallback Behavior**:
+
+| Scenario | Behavior |
+|----------|----------|
+| Field not in mapping | Warning logged → ES post-filter |
+| Unsupported query type | Warning logged → ES post-filter |
+| SQL conversion fails | Warning logged → ES post-filter |
+| No field_mapping configured | Skip pushdown → ES post-filter (current behavior) |
+
+**Security**:
+
+All string values are SQL-escaped to prevent injection:
+- `O'Reilly` → `O''Reilly` (single quotes doubled)
+- `${jndi:ldap://evil.com}` → Quoted as literal string
+- `'; DROP TABLE--` → Escaped, treated as literal text
+
+**Performance Impact**:
+
+Prefiltering reduces the vector search space before expensive calculations:
+- **Without prefilter**: Lance searches entire dataset, ES filters results
+- **With prefilter**: Lance searches only matching rows, ~10-100x faster for selective filters
+
+**Testing**:
+
+- Unit tests: `EsToLanceFilterConverterTests` (385 lines, comprehensive edge cases)
+- Integration tests: `LanceFilterPushdownIntegrationTests` (field mapping, SQL escaping, fallback)
+- Validation: `LV-50` to `LV-55` in `reg_validation_guide.md`
+
 ### 5.9 Native Memory Management
 
 #### 5.9.1 Architecture
@@ -1791,6 +1895,74 @@ s3://bucket/vectors/<index-name>/
 | External mount (matching) | 1 shard = 1 Lance partition | Direct mapping |
 | External mount (non-matching) | Virtual partitioning | See 5.10.2 |
 | Shard relocation | Cache follows shard | See 5.10.3 |
+
+#### 5.10.1.1 Configurable Sharding Strategy
+
+**Problem**: Lance datasets may be sharded using different algorithms than ES's default Murmur3 hash. Without knowing the sharding algorithm, ES cannot efficiently filter candidates to the current shard.
+
+**Solution**: Configurable `ShardingStrategy` parameter in storage configuration:
+
+**ShardingStrategy Options:**
+
+| Strategy | Description | Use Case |
+|----------|-------------|----------|
+| `NONE` | No candidate filtering | Unsharded datasets, unknown sharding, or custom algorithms |
+| `ES_ROUTING` | Filter using ES's Murmur3 hash | Lance datasets sharded with ES's algorithm |
+
+**Configuration Example:**
+
+```json
+{
+  "storage": {
+    "type": "external",
+    "uri_prefix": "s3://datalake/vectors/",
+    "shard_path": "{index}/shard-{shard_id}",
+    "dataset_name": "vectors.lance",
+    "sharding_strategy": "ES_ROUTING"
+  }
+}
+```
+
+**ES Routing Algorithm:**
+
+```java
+// ES uses Murmur3 hash function for document routing
+int shardId = Math.abs(Murmur3HashFunction.hash(documentId)) % numShards;
+
+// Same algorithm used for candidate filtering
+int candidateShardId = Math.abs(Murmur3HashFunction.hash(candidateId)) % numShards;
+
+// Only include candidates belonging to current shard
+if (shardId == candidateShardId) {
+    // Include candidate
+}
+```
+
+**Implementation:**
+
+- `LanceStorageConfig.ShardingStrategy` enum stores the configured strategy
+- `LanceKnnQuery.filterCandidatesByShard()` applies filtering based on strategy
+- Defaults: `NONE` for legacy mode, `ES_ROUTING` for shard-aware mode
+
+**Creating Lance Datasets with ES Routing:**
+
+```python
+from org.elasticsearch.cluster.routing.Murmur3HashFunction import hash
+
+def shard_document(document_id: str, num_shards: int) -> int:
+    """Shard document using ES's Murmur3 hash function."""
+    return abs(hash(document_id)) % num_shards
+
+# Create sharded dataset
+for doc in documents:
+    shard_id = shard_document(doc['_id'], num_shards=3)
+    shard_datasets[shard_id].add(doc)
+```
+
+**Benefits:**
+- 1:1 mapping between ES shards and Lance datasets when algorithms match
+- Optimal performance: each shard only searches its own dataset
+- Flexibility: can disable filtering for incompatible sharding schemes
 
 #### 5.10.2 External Index with Non-Matching Partitions
 

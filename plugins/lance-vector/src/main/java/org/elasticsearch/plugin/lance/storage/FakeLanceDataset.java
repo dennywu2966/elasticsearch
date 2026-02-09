@@ -172,6 +172,13 @@ public class FakeLanceDataset implements LanceDataset {
         return search(queryVector, k, "cosine");
     }
 
+    @Override
+    public List<Candidate> search(float[] queryVector, int k, String columnName, int nprobes, String sqlFilter, String similarity)
+        throws IOException {
+        // FakeLanceDataset doesn't support SQL filtering or nprobes, just return unfiltered results
+        return search(queryVector, k, similarity);
+    }
+
     private float score(float[] query, float[] vector, String similarity) {
         if (query.length != vector.length) {
             throw new IllegalArgumentException("Vector dims mismatch");

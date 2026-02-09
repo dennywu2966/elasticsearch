@@ -67,6 +67,7 @@ import java.util.stream.Collectors;
  */
 public class LanceKnnQuery extends Query implements QueryProfilerProvider {
     private static final Logger logger = LogManager.getLogger(LanceKnnQuery.class);
+    private static final int DEFAULT_NPROBES = 20;
 
     /**
      * Strategy for how filters are applied during kNN search.
@@ -161,6 +162,7 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
     private final float[] queryVector;
     private final int k;
     private final int numCandidates;
+    private final int nprobes;
     private final String similarity;
     private final Query filter;
     private final int dims;
@@ -179,6 +181,36 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
         int dims,
         PreFilterHeuristic prefilterHeuristic
     ) {
+        this(
+            fieldName,
+            storageConfig,
+            indexName,
+            shardId,
+            queryVector,
+            k,
+            numCandidates,
+            similarity,
+            filter,
+            dims,
+            DEFAULT_NPROBES,
+            prefilterHeuristic
+        );
+    }
+
+    public LanceKnnQuery(
+        String fieldName,
+        LanceStorageConfig storageConfig,
+        String indexName,
+        int shardId,
+        float[] queryVector,
+        int k,
+        int numCandidates,
+        String similarity,
+        Query filter,
+        int dims,
+        int nprobes,
+        PreFilterHeuristic prefilterHeuristic
+    ) {
         this.fieldName = Objects.requireNonNull(fieldName);
         this.storageConfig = Objects.requireNonNull(storageConfig);
         this.indexName = Objects.requireNonNull(indexName);
@@ -186,6 +218,7 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
         this.queryVector = Objects.requireNonNull(queryVector);
         this.k = k;
         this.numCandidates = numCandidates;
+        this.nprobes = nprobes > 0 ? nprobes : DEFAULT_NPROBES;
         this.similarity = similarity == null ? "cosine" : similarity;
         this.filter = filter;
         this.dims = dims;
@@ -235,27 +268,45 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
             final int topK = k;
             final LanceTimingContext capturedContext = timingContext;
 
-            // Legacy mode: search once, share candidates across all segments
+            // Search once per Weight and share candidates across all segments.
             final List<LanceDataset.Candidate> sharedCandidates;
-            if (storageConfig.isShardAware() == false) {
+            final int resolvedShardId;
+            if (storageConfig.isShardAware()) {
+                if (shardId < 0) {
+                    throw new IllegalArgumentException("shardId must be known for shard-aware Lance queries");
+                }
+                logger.info("Lance KNN createWeight: SHARD-AWARE mode, indexName={}, shardId={}", indexName, shardId);
+                resolvedShardId = shardId;
+            } else {
                 logger.info("Lance KNN createWeight: LEGACY mode, indexName={}, shardId={}", indexName, shardId);
-                String resolvedUri = storageConfig.resolveUri(indexName, Math.max(shardId, 0));
-                LanceDatasetConfig config = buildDatasetConfig();
+                resolvedShardId = Math.max(shardId, 0);
+            }
+
+            String resolvedUri = storageConfig.resolveUri(indexName, resolvedShardId);
+            LanceDatasetConfig config = buildDatasetConfig();
+            String sqlFilter = tryConvertFilterToSql(filterQuery);
+            long searchStart = System.nanoTime();
+            List<LanceDataset.Candidate> candidates = LanceDatasetRegistry.withSearchLock(() -> {
                 LanceDataset dataset;
                 try (var timer = new LanceTimer(LanceTimingContext.LanceTimingStage.REGISTRY_CACHE_LOOKUP)) {
                     dataset = LanceDatasetRegistry.getOrLoad(resolvedUri, dims, config);
-                    sharedCandidates = dataset.search(queryVector, numCandidates, similarity);
                 }
-                logger.debug(
-                    "Lance KNN (legacy): dataset has {} dims, searched with numCandidates={}, got {} candidates",
-                    dataset.dims(),
-                    numCandidates,
-                    sharedCandidates.size()
+                if (sqlFilter == null && nprobes == DEFAULT_NPROBES) {
+                    return dataset.search(queryVector, numCandidates, similarity);
+                }
+                return dataset.search(queryVector, numCandidates, storageConfig.vectorColumn(), nprobes, sqlFilter, similarity);
+            });
+            if (capturedContext != null) {
+                capturedContext.record(
+                    LanceTimingContext.LanceTimingStage.NATIVE_SEARCH_EXECUTION,
+                    (System.nanoTime() - searchStart) / 1_000_000
                 );
-            } else {
-                logger.info("Lance KNN createWeight: SHARD-AWARE mode, indexName={}, shardId={}", indexName, shardId);
-                sharedCandidates = null; // Will be resolved per-shard in scorerSupplier
             }
+
+            if (storageConfig.isShardAware()) {
+                candidates = filterCandidatesByShard(candidates, storageConfig.getNumShards());
+            }
+            sharedCandidates = candidates;
 
             return new Weight(this) {
                 @Override
@@ -352,9 +403,19 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
         String ossKeyId = storageConfig.ossAccessKeyId();
         String ossKeySecret = storageConfig.ossAccessKeySecret();
         if (ossEp != null) {
-            return new LanceDatasetConfig("_id", "vector", dims, ossEp, ossKeyId, ossKeySecret);
+            return new LanceDatasetConfig(storageConfig.idColumn(), storageConfig.vectorColumn(), dims, ossEp, ossKeyId, ossKeySecret);
         }
-        return new LanceDatasetConfig("_id", "vector", dims, null, null, null);
+        return new LanceDatasetConfig(storageConfig.idColumn(), storageConfig.vectorColumn(), dims, null, null, null);
+    }
+
+    private static int routingHashToShardId(int hash, int numRoutingShards, int routingFactor) {
+        if (numRoutingShards <= 0) {
+            throw new IllegalArgumentException("numRoutingShards must be positive");
+        }
+        if (routingFactor <= 0) {
+            throw new IllegalArgumentException("routingFactor must be positive");
+        }
+        return Math.floorMod(hash, numRoutingShards) / routingFactor;
     }
 
     /**
@@ -378,7 +439,8 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
         List<LanceDataset.Candidate> filteredCandidates = new java.util.ArrayList<>(candidates.size());
         for (LanceDataset.Candidate candidate : candidates) {
             // Calculate shard ID using ES's hash function
-            int candidateShardId = Math.abs(org.elasticsearch.cluster.routing.Murmur3HashFunction.hash(candidate.id())) % numShards;
+            int candidateHash = org.elasticsearch.cluster.routing.Murmur3HashFunction.hash(candidate.id());
+            int candidateShardId = routingHashToShardId(candidateHash, numShards, 1);
 
             // Only include candidates that belong to this shard
             // (or all candidates if we can't determine our shard ID)
@@ -472,47 +534,8 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
             }
         }
 
-        // Phase 2: Get candidates to process
-        List<LanceDataset.Candidate> results;
-        if (sharedCandidates != null) {
-            // Legacy mode: use shared candidates
-            results = sharedCandidates;
-        } else {
-            // Shard-aware mode: resolve dataset and search per-shard
-            int leafShardId = Math.max(shardId, 0);
-            String resolvedUri = storageConfig.resolveUri(indexName, leafShardId);
-            logger.info(
-                "Lance KNN: indexName={}, shardId={}, leafShardId={}, resolvedUri={}",
-                indexName,
-                shardId,
-                leafShardId,
-                resolvedUri
-            );
-            LanceDatasetConfig config = buildDatasetConfig();
-            LanceDataset dataset;
-            try (var timer = new LanceTimer(LanceTimingContext.LanceTimingStage.REGISTRY_CACHE_LOOKUP)) {
-                dataset = LanceDatasetRegistry.getOrLoad(resolvedUri, dims, config);
-            }
-
-            // Try to convert ES filter to Lance SQL for native prefiltering
-            String sqlFilter = tryConvertFilterToSql(filter);
-
-            long searchStart = System.nanoTime();
-            List<LanceDataset.Candidate> allCandidates;
-            if (sqlFilter != null) {
-                // Use SQL filter for native prefiltering
-                allCandidates = dataset.search(queryVector, numCandidates, storageConfig.vectorColumn(), sqlFilter);
-            } else {
-                // No SQL filter, use standard search
-                allCandidates = dataset.search(queryVector, numCandidates, similarity);
-            }
-            if (timing != null) {
-                timing.record(LanceTimingContext.LanceTimingStage.NATIVE_SEARCH_EXECUTION, (System.nanoTime() - searchStart) / 1_000_000);
-            }
-
-            // Filter candidates to only include those belonging to this shard
-            results = filterCandidatesByShard(allCandidates, storageConfig.getNumShards());
-        }
+        // Phase 2: Use candidates computed once in createWeight.
+        List<LanceDataset.Candidate> results = sharedCandidates;
 
         // Phase 3: Map results to Lucene doc IDs and apply filter
         long joinStart = System.nanoTime();
@@ -607,6 +630,7 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
         LanceKnnQuery other = (LanceKnnQuery) obj;
         return k == other.k
             && numCandidates == other.numCandidates
+            && nprobes == other.nprobes
             && fieldName.equals(other.fieldName)
             && storageConfigEquals(other)
             && similarity.equals(other.similarity);
@@ -625,9 +649,9 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
     @Override
     public int hashCode() {
         if (storageConfig.isShardAware()) {
-            return Objects.hash(fieldName, indexName, shardId, k, numCandidates, similarity);
+            return Objects.hash(fieldName, indexName, shardId, k, numCandidates, nprobes, similarity);
         }
-        return Objects.hash(fieldName, storageConfig.uri(), k, numCandidates, similarity);
+        return Objects.hash(fieldName, storageConfig.uri(), k, numCandidates, nprobes, similarity);
     }
 
     @Override

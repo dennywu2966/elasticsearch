@@ -395,6 +395,27 @@ public class RealLanceDataset implements LanceDataset {
         }
     }
 
+    @Override
+    public List<Candidate> search(float[] queryVector, int k, String columnName, int nprobes, String sqlFilter) throws IOException {
+        return search(queryVector, k, columnName, nprobes, sqlFilter, "cosine");
+    }
+
+    @Override
+    public List<Candidate> search(float[] queryVector, int k, String columnName, int nprobes, String sqlFilter, String similarity)
+        throws IOException {
+        logger.debug("Lance search with nprobes={} and SQL filter: {}, k={}", nprobes, sqlFilter, k);
+        if (queryVector.length != dims) {
+            throw new IllegalArgumentException("Query vector dims mismatch: expected " + dims + ", got " + queryVector.length);
+        }
+
+        try (var timer = new LanceTimer(LanceTimingContext.LanceTimingStage.VECTOR_SEARCH_SETUP)) {
+            return vectorSearch(queryVector, k, similarity, nprobes, sqlFilter);
+        } catch (Exception e) {
+            logger.error("Lance search with nprobes and SQL filter failed: {}", e.getMessage(), e);
+            throw new RuntimeException("Lance search with nprobes and SQL filter failed", e);
+        }
+    }
+
     /**
      * Perform vector search using lance-java's native vector search API.
      * This leverages the native Rust implementation for fast approximate nearest neighbor search.

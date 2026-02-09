@@ -11,11 +11,16 @@ package org.elasticsearch.plugin.lance;
 
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.core.TimeValue;
+import org.elasticsearch.plugin.lance.storage.LanceRefreshService;
+import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.rest.BaseRestHandler;
 import org.elasticsearch.rest.RestHandler;
 import org.elasticsearch.test.ESTestCase;
 
+import java.lang.reflect.Field;
 import java.util.Collection;
+
+import static org.mockito.Mockito.mock;
 
 /**
  * Tests for LanceVectorPlugin cluster-level settings.
@@ -58,6 +63,40 @@ public class LanceVectorPluginSettingsTests extends ESTestCase {
                 fail("plugin close failed: " + e.getMessage());
             }
         }
+    }
+
+    public void testCreateComponentsStartsRefreshWhenEnabled() throws Exception {
+        LanceVectorPlugin plugin = new LanceVectorPlugin(Settings.EMPTY);
+        Plugin.PluginServices services = mock(Plugin.PluginServices.class);
+
+        try {
+            plugin.createComponents(services);
+            LanceRefreshService refreshService = extractRefreshService(plugin);
+            assertTrue(refreshService.isRunning());
+        } finally {
+            plugin.close();
+        }
+    }
+
+    public void testCreateComponentsDoesNotStartRefreshWhenDisabled() throws Exception {
+        Settings settings = Settings.builder().put("lance.refresh.enabled", false).build();
+        LanceVectorPlugin plugin = new LanceVectorPlugin(settings);
+
+        Plugin.PluginServices services = mock(Plugin.PluginServices.class);
+
+        try {
+            plugin.createComponents(services);
+            LanceRefreshService refreshService = extractRefreshService(plugin);
+            assertFalse(refreshService.isRunning());
+        } finally {
+            plugin.close();
+        }
+    }
+
+    private static LanceRefreshService extractRefreshService(LanceVectorPlugin plugin) throws Exception {
+        Field field = LanceVectorPlugin.class.getDeclaredField("refreshService");
+        field.setAccessible(true);
+        return (LanceRefreshService) field.get(plugin);
     }
 
     private static boolean containsPath(Collection<RestHandler> handlers, String path) {

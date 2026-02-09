@@ -210,7 +210,8 @@ public class LanceKnnQueryBuilder extends AbstractQueryBuilder<LanceKnnQueryBuil
             null,  // heuristic - ignored by Lance
             false,  // hnswEarlyTermination - ignored by Lance
             indexName,  // indexName for shard-aware URI resolution
-            shardId  // shardId for shard-aware URI resolution
+            shardId,  // shardId for shard-aware URI resolution
+            nprobes  // nprobes for IVF partition probing
         );
     }
 

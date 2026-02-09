@@ -19,6 +19,8 @@ import org.elasticsearch.core.TimeValue;
 
 import java.io.IOException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Supplier;
 
 /**
@@ -50,6 +52,14 @@ public class LanceDatasetRegistry {
 
     // Tracks which datasets are currently being loaded to prevent duplicate loads
     private static final ConcurrentHashMap<String, Object> LOADING_URIS = new ConcurrentHashMap<>();
+
+    // Guards refresh invalidation (write) against active query/search execution (read).
+    private static final ReentrantReadWriteLock QUERY_REFRESH_GUARD = new ReentrantReadWriteLock();
+
+    @FunctionalInterface
+    public interface IOAction<T> {
+        T run() throws IOException;
+    }
 
     /**
      * Removal listener for cache evictions.
@@ -247,18 +257,20 @@ public class LanceDatasetRegistry {
      * @param uri Dataset URI to invalidate
      */
     public static void invalidate(String uri) {
-        Cache<String, LanceDataset> cache = getCache();
-        LanceDataset removed = cache.get(uri);
-        if (removed != null) {
-            try {
-                logger.debug("Invalidating dataset from registry: {}", uri);
-                removed.close();
-            } catch (IOException e) {
-                logger.warn("Error closing invalidated dataset {}: {}", uri, e.getMessage());
+        withRefreshLock(() -> {
+            Cache<String, LanceDataset> cache = getCache();
+            LanceDataset removed = cache.get(uri);
+            if (removed != null) {
+                try {
+                    logger.debug("Invalidating dataset from registry: {}", uri);
+                    removed.close();
+                } catch (IOException e) {
+                    logger.warn("Error closing invalidated dataset {}: {}", uri, e.getMessage());
+                }
             }
-        }
-        cache.invalidate(uri);
-        LOADING_URIS.remove(uri);
+            cache.invalidate(uri);
+            LOADING_URIS.remove(uri);
+        });
     }
 
     /**
@@ -272,12 +284,37 @@ public class LanceDatasetRegistry {
      * For production use, prefer invalidate() for specific URIs.
      */
     public static void clear() {
-        logger.debug("Clearing all datasets from registry");
-        Cache<String, LanceDataset> cache = getCache();
+        withRefreshLock(() -> {
+            logger.debug("Clearing all datasets from registry");
+            Cache<String, LanceDataset> cache = getCache();
 
-        // The removal listener will handle closing all datasets
-        cache.invalidateAll();
-        LOADING_URIS.clear();
+            // The removal listener will handle closing all datasets
+            cache.invalidateAll();
+            LOADING_URIS.clear();
+        });
+    }
+
+    /**
+     * Execute a search-path action while blocking refresh invalidation.
+     */
+    public static <T> T withSearchLock(IOAction<T> action) throws IOException {
+        Lock readLock = QUERY_REFRESH_GUARD.readLock();
+        readLock.lock();
+        try {
+            return action.run();
+        } finally {
+            readLock.unlock();
+        }
+    }
+
+    private static void withRefreshLock(Runnable action) {
+        Lock writeLock = QUERY_REFRESH_GUARD.writeLock();
+        writeLock.lock();
+        try {
+            action.run();
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     /**

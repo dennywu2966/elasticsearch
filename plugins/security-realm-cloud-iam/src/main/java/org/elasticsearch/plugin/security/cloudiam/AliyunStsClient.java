@@ -29,7 +29,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 
-public class AliyunStsClient implements IamClient {
+public class AliyunStsClient implements IamClient, AutoCloseable {
     private static final String PARAM_ACTION = "Action";
     private static final String PARAM_VERSION = "Version";
     private static final String PARAM_FORMAT = "Format";
@@ -85,6 +85,11 @@ public class AliyunStsClient implements IamClient {
         } catch (Exception e) {
             listener.onFailure(e);
         }
+    }
+
+    @Override
+    public void close() {
+        httpClient.close();
     }
 
     private static String resolveEndpoint(String endpoint, String region) {

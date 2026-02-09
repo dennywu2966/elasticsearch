@@ -56,24 +56,25 @@ public class AliyunStsClientTests extends ESTestCase {
         });
         server.start();
         try {
-            AliyunStsClient client = new AliyunStsClient(configForEndpoint(endpoint(server)));
-            CloudIamToken token = CloudIamToken.fromHeaders(
-                buildSignedHeader("AKID", "sig", "nonce", Instant.now().truncatedTo(ChronoUnit.SECONDS), "sts-token"),
-                8192
-            );
-            PlainActionFuture<IamPrincipal> future = new PlainActionFuture<>();
-            client.verify(token, future);
-            IamPrincipal principal = future.actionGet();
-            assertThat(principal.arn(), is("acs:ram::123:user/test"));
-            assertThat(principal.accountId(), is("123"));
-            assertThat(principal.userId(), is("user-id"));
-            assertThat(principal.principalType(), is(IamPrincipal.PrincipalType.USER));
+            try (AliyunStsClient client = new AliyunStsClient(configForEndpoint(endpoint(server)))) {
+                CloudIamToken token = CloudIamToken.fromHeaders(
+                    buildSignedHeader("AKID", "sig", "nonce", Instant.now().truncatedTo(ChronoUnit.SECONDS), "sts-token"),
+                    8192
+                );
+                PlainActionFuture<IamPrincipal> future = new PlainActionFuture<>();
+                client.verify(token, future);
+                IamPrincipal principal = future.actionGet();
+                assertThat(principal.arn(), is("acs:ram::123:user/test"));
+                assertThat(principal.accountId(), is("123"));
+                assertThat(principal.userId(), is("user-id"));
+                assertThat(principal.principalType(), is(IamPrincipal.PrincipalType.USER));
 
-            Map<String, String> params = parseQuery(queryRef.get());
-            assertThat(params.get("Action"), is("GetCallerIdentity"));
-            assertThat(params.get("AccessKeyId"), is("AKID"));
-            assertThat(params.get("Signature"), is("sig"));
-            assertThat(params.get("SecurityToken"), is("sts-token"));
+                Map<String, String> params = parseQuery(queryRef.get());
+                assertThat(params.get("Action"), is("GetCallerIdentity"));
+                assertThat(params.get("AccessKeyId"), is("AKID"));
+                assertThat(params.get("Signature"), is("sig"));
+                assertThat(params.get("SecurityToken"), is("sts-token"));
+            }
         } finally {
             server.stop(0);
         }
@@ -97,64 +98,67 @@ public class AliyunStsClientTests extends ESTestCase {
         });
         server.start();
         try {
-            AliyunStsClient client = new AliyunStsClient(configForEndpoint(endpoint(server)));
-            CloudIamToken token = CloudIamToken.fromHeaders(
-                buildSignedHeader("AKID", "sig", "nonce", Instant.now().truncatedTo(ChronoUnit.SECONDS), null),
-                8192
-            );
-            PlainActionFuture<IamPrincipal> future = new PlainActionFuture<>();
-            client.verify(token, future);
-            IamPrincipal principal = future.actionGet();
-            assertThat(principal.arn(), is("acs:ram::456:user/demo"));
-            assertThat(principal.accountId(), is("456"));
+            try (AliyunStsClient client = new AliyunStsClient(configForEndpoint(endpoint(server)))) {
+                CloudIamToken token = CloudIamToken.fromHeaders(
+                    buildSignedHeader("AKID", "sig", "nonce", Instant.now().truncatedTo(ChronoUnit.SECONDS), null),
+                    8192
+                );
+                PlainActionFuture<IamPrincipal> future = new PlainActionFuture<>();
+                client.verify(token, future);
+                IamPrincipal principal = future.actionGet();
+                assertThat(principal.arn(), is("acs:ram::456:user/demo"));
+                assertThat(principal.accountId(), is("456"));
+            }
         } finally {
             server.stop(0);
         }
     }
 
     public void testRejectsUnknownParameter() {
-        AliyunStsClient client = new AliyunStsClient(configForEndpoint("http://127.0.0.1:9"));
-        String json = """
-            {
-              "Action": "GetCallerIdentity",
-              "Version": "2015-04-01",
-              "AccessKeyId": "AKID",
-              "Signature": "sig",
-              "SignatureMethod": "HMAC-SHA1",
-              "SignatureVersion": "1.0",
-              "SignatureNonce": "nonce",
-              "Timestamp": "2025-01-01T00:00:00Z",
-              "ExtraParam": "nope"
-            }
-            """;
-        String header = Base64.getEncoder().encodeToString(json.getBytes(StandardCharsets.UTF_8));
-        CloudIamToken badToken = CloudIamToken.fromHeaders(header, 8192);
-        PlainActionFuture<IamPrincipal> future = new PlainActionFuture<>();
-        client.verify(badToken, future);
-        Exception e = expectThrows(Exception.class, future::actionGet);
-        assertThat(e.getMessage(), containsString("unsupported signed parameter"));
+        try (AliyunStsClient client = new AliyunStsClient(configForEndpoint("http://127.0.0.1:9"))) {
+            String json = """
+                {
+                  "Action": "GetCallerIdentity",
+                  "Version": "2015-04-01",
+                  "AccessKeyId": "AKID",
+                  "Signature": "sig",
+                  "SignatureMethod": "HMAC-SHA1",
+                  "SignatureVersion": "1.0",
+                  "SignatureNonce": "nonce",
+                  "Timestamp": "2025-01-01T00:00:00Z",
+                  "ExtraParam": "nope"
+                }
+                """;
+            String header = Base64.getEncoder().encodeToString(json.getBytes(StandardCharsets.UTF_8));
+            CloudIamToken badToken = CloudIamToken.fromHeaders(header, 8192);
+            PlainActionFuture<IamPrincipal> future = new PlainActionFuture<>();
+            client.verify(badToken, future);
+            Exception e = expectThrows(Exception.class, future::actionGet);
+            assertThat(e.getMessage(), containsString("unsupported signed parameter"));
+        }
     }
 
     public void testRejectsUnsupportedSignatureMethod() {
-        AliyunStsClient client = new AliyunStsClient(configForEndpoint("http://127.0.0.1:9"));
-        String json = """
-            {
-              "Action": "GetCallerIdentity",
-              "Version": "2015-04-01",
-              "AccessKeyId": "AKID",
-              "Signature": "sig",
-              "SignatureMethod": "HMAC-SHA512",
-              "SignatureVersion": "1.0",
-              "SignatureNonce": "nonce",
-              "Timestamp": "2025-01-01T00:00:00Z"
-            }
-            """;
-        String header = Base64.getEncoder().encodeToString(json.getBytes(StandardCharsets.UTF_8));
-        CloudIamToken token = CloudIamToken.fromHeaders(header, 8192);
-        PlainActionFuture<IamPrincipal> future = new PlainActionFuture<>();
-        client.verify(token, future);
-        Exception e = expectThrows(Exception.class, future::actionGet);
-        assertThat(e.getMessage(), containsString("unsupported signature method"));
+        try (AliyunStsClient client = new AliyunStsClient(configForEndpoint("http://127.0.0.1:9"))) {
+            String json = """
+                {
+                  "Action": "GetCallerIdentity",
+                  "Version": "2015-04-01",
+                  "AccessKeyId": "AKID",
+                  "Signature": "sig",
+                  "SignatureMethod": "HMAC-SHA512",
+                  "SignatureVersion": "1.0",
+                  "SignatureNonce": "nonce",
+                  "Timestamp": "2025-01-01T00:00:00Z"
+                }
+                """;
+            String header = Base64.getEncoder().encodeToString(json.getBytes(StandardCharsets.UTF_8));
+            CloudIamToken token = CloudIamToken.fromHeaders(header, 8192);
+            PlainActionFuture<IamPrincipal> future = new PlainActionFuture<>();
+            client.verify(token, future);
+            Exception e = expectThrows(Exception.class, future::actionGet);
+            assertThat(e.getMessage(), containsString("unsupported signature method"));
+        }
     }
 
     private RealmConfig configForEndpoint(String endpoint) {

@@ -238,7 +238,7 @@ public class CloudIamRealmTests extends ESTestCase {
 
     private CloudIamRealm createRealm(Settings settings, TestThreadPool threadPool, UserRoleMapper mapper, IamClient client) {
         RealmConfig config = createConfig(settings, threadPool);
-        return new CloudIamRealm(config, threadPool, mapper, client);
+        return new CloudIamRealm(config, threadPool, mapper, client, client);
     }
 
     private RealmConfig createConfig(Settings settings, TestThreadPool threadPool) {

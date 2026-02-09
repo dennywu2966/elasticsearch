@@ -9,9 +9,12 @@
 
 package org.elasticsearch.plugin.lance.storage;
 
+import org.apache.arrow.vector.VarCharVector;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.test.ESTestCase;
 
+import java.io.IOException;
+import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 
@@ -25,11 +28,13 @@ public class LanceRefreshServiceTests extends ESTestCase {
     @Override
     public void setUp() throws Exception {
         super.setUp();
+        LanceDatasetRegistry.clear();
         executorService = Executors.newSingleThreadScheduledExecutor();
     }
 
     @Override
     public void tearDown() throws Exception {
+        LanceDatasetRegistry.clear();
         executorService.shutdown();
         super.tearDown();
     }
@@ -47,6 +52,48 @@ public class LanceRefreshServiceTests extends ESTestCase {
         service.start();
         service.refreshAll();
         service.stop();
+    }
+
+    public void testRefreshAllClearsCachedDatasets() throws IOException {
+        LanceRefreshService service = new LanceRefreshService(executorService);
+        LanceDataset dataset = new LanceDataset() {
+            @Override
+            public int dims() {
+                return 3;
+            }
+
+            @Override
+            public List<Candidate> search(float[] query, int numCandidates, String similarity) {
+                return List.of();
+            }
+
+            @Override
+            public List<Candidate> search(float[] queryVector, int k, String columnName, VarCharVector idFilter) {
+                return List.of();
+            }
+
+            @Override
+            public List<Candidate> search(float[] queryVector, int k, String columnName, int nprobes) {
+                return List.of();
+            }
+
+            @Override
+            public List<Candidate> search(float[] queryVector, int k, String columnName, String sqlFilter) {
+                return List.of();
+            }
+
+            @Override
+            public String uri() {
+                return "test://refresh";
+            }
+        };
+
+        LanceDatasetRegistry.get("test://refresh", () -> dataset);
+        assertTrue(LanceDatasetRegistry.contains("test://refresh"));
+
+        service.refreshAll();
+
+        assertFalse(LanceDatasetRegistry.contains("test://refresh"));
     }
 
     public void testSetRefreshInterval() {

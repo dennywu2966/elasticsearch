@@ -94,10 +94,14 @@ public class LanceRefreshService implements Closeable {
      * Checks each cached dataset's manifest for version changes.
      */
     public void refreshAll() {
-        logger.debug("Manual refresh triggered for all cached datasets");
-        // TODO: iterate LanceDatasetRegistry entries and check manifests
-        // This is a placeholder for future NRT implementation
-        // For now, we'd need Lance SDK to expose manifest version checking
+        int cached = LanceDatasetRegistry.size();
+        if (cached == 0) {
+            logger.debug("Lance refresh triggered with empty cache");
+            return;
+        }
+
+        LanceDatasetRegistry.clear();
+        logger.info("Lance refresh invalidated {} cached datasets", cached);
     }
 
     private void scheduleNextRefresh() {

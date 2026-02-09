@@ -97,6 +97,7 @@ public interface LanceDataset extends Closeable {
      */
     List<Candidate> search(float[] queryVector, int k, String columnName, int nprobes) throws IOException;
 
+
     /**
      * Search with SQL filter pushdown.
      * <p>
@@ -114,6 +115,34 @@ public interface LanceDataset extends Closeable {
      * @throws IOException if search fails
      */
     List<Candidate> search(float[] queryVector, int k, String columnName, String sqlFilter) throws IOException;
+
+
+    /**
+     * Search with both configurable nprobes and SQL filter pushdown.
+     * <p>
+     * Default behavior preserves backward compatibility:
+     * <ul>
+     *   <li>If {@code sqlFilter} is provided, delegate to {@link #search(float[], int, String, String)}</li>
+     *   <li>Otherwise delegate to {@link #search(float[], int, String, int)}</li>
+     * </ul>
+     */
+    default List<Candidate> search(float[] queryVector, int k, String columnName, int nprobes, String sqlFilter) throws IOException {
+        if (sqlFilter != null && sqlFilter.isEmpty() == false) {
+            return search(queryVector, k, columnName, sqlFilter);
+        }
+        return search(queryVector, k, columnName, nprobes);
+    }
+
+    /**
+     * Search with configurable nprobes, optional SQL filter, and explicit similarity.
+     * <p>
+     * Default implementation preserves backward compatibility by delegating to
+     * the existing nprobes/sqlFilter search method and ignoring similarity.
+     */
+    default List<Candidate> search(float[] queryVector, int k, String columnName, int nprobes, String sqlFilter, String similarity)
+        throws IOException {
+        return search(queryVector, k, columnName, nprobes, sqlFilter);
+    }
 
     /**
      * Get the URI this dataset was loaded from.

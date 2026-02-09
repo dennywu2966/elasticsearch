@@ -25,8 +25,10 @@ import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.plugin.lance.mapper.LanceVectorFieldMapper;
 import org.elasticsearch.plugin.lance.query.LanceKnnQueryBuilder;
 import org.elasticsearch.plugin.lance.query.PreFilterHeuristic;
+import org.elasticsearch.plugin.lance.rest.RestLanceRefreshAction;
 import org.elasticsearch.plugin.lance.rest.RestLanceStatsAction;
 import org.elasticsearch.plugin.lance.storage.LanceDatasetRegistry;
+import org.elasticsearch.plugin.lance.storage.LanceRefreshService;
 import org.elasticsearch.plugin.lance.storage.RealLanceDataset;
 import org.elasticsearch.plugins.ActionPlugin;
 import org.elasticsearch.plugins.MapperPlugin;
@@ -42,6 +44,9 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
@@ -96,9 +101,26 @@ public class LanceVectorPlugin extends Plugin implements MapperPlugin, SearchPlu
     );
 
     private final boolean profilingEnabled;
+    private final boolean refreshEnabled;
+    private final ScheduledExecutorService refreshExecutor;
+    private final LanceRefreshService refreshService;
 
     public LanceVectorPlugin(Settings settings) {
         this.profilingEnabled = LANCE_PROFILING_ENABLED.get(settings);
+        this.refreshEnabled = LANCE_REFRESH_ENABLED.get(settings);
+        this.refreshExecutor = Executors.newSingleThreadScheduledExecutor();
+        this.refreshService = new LanceRefreshService(refreshExecutor);
+        this.refreshService.setRefreshInterval(LANCE_REFRESH_INTERVAL.get(settings));
+    }
+
+    @Override
+    public Collection<?> createComponents(PluginServices services) {
+        if (refreshEnabled) {
+            refreshService.start();
+        } else {
+            logger.info("Lance automatic refresh is disabled via setting {}", LANCE_REFRESH_ENABLED.getKey());
+        }
+        return List.of();
     }
 
     @Override
@@ -150,13 +172,19 @@ public class LanceVectorPlugin extends Plugin implements MapperPlugin, SearchPlu
         Supplier<DiscoveryNodes> nodesInCluster,
         Predicate<NodeFeature> clusterSupportsFeature
     ) {
-        return List.of(new RestLanceStatsAction());
+        return List.of(new RestLanceStatsAction(), new RestLanceRefreshAction(refreshService));
     }
 
     @Override
     public void close() throws IOException {
         logger.info("Closing Lance Vector Plugin - cleaning up resources");
         try {
+            refreshService.close();
+            refreshExecutor.shutdown();
+            if (refreshExecutor.awaitTermination(5, TimeUnit.SECONDS) == false) {
+                refreshExecutor.shutdownNow();
+            }
+
             // Close all cached datasets to release native resources
             int cacheSize = LanceDatasetRegistry.size();
             if (cacheSize > 0) {
@@ -169,6 +197,10 @@ public class LanceVectorPlugin extends Plugin implements MapperPlugin, SearchPlu
                 logger.info("Closing Arrow allocator with {} bytes allocated", allocatedBefore);
                 RealLanceDataset.closeAllocator();
             }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.error("Interrupted while stopping Lance refresh executor", e);
+            throw new IOException("Interrupted while stopping Lance refresh executor", e);
         } catch (Exception e) {
             logger.error("Error closing Lance Vector Plugin resources", e);
             throw e;

@@ -225,6 +225,8 @@ public class LanceVectorFieldMapper extends FieldMapper {
     };
 
     public static class LanceVectorFieldType extends MappedFieldType {
+        private static final int DEFAULT_NPROBES = 20;
+
         private final int dims;
         private final String similarity;
         private final LanceStorageConfig storage;
@@ -284,7 +286,8 @@ public class LanceVectorFieldMapper extends FieldMapper {
                 heuristic,
                 hnswEarlyTermination,
                 "",
-                -1
+                -1,
+                DEFAULT_NPROBES
             );
         }
 
@@ -322,6 +325,38 @@ public class LanceVectorFieldMapper extends FieldMapper {
             String indexName,
             int shardId
         ) {
+            return createKnnQuery(
+                queryVector,
+                k,
+                numCands,
+                visitPercentage,
+                oversample,
+                filter,
+                vectorSimilarity,
+                parentFilter,
+                heuristic,
+                hnswEarlyTermination,
+                indexName,
+                shardId,
+                DEFAULT_NPROBES
+            );
+        }
+
+        public Query createKnnQuery(
+            VectorData queryVector,
+            int k,
+            int numCands,
+            Float visitPercentage,  // Ignored - Lance doesn't use this
+            Float oversample,  // Ignored - Lance doesn't use this
+            Query filter,
+            Float vectorSimilarity,  // Ignored - Lance uses its own similarity
+            org.apache.lucene.search.join.BitSetProducer parentFilter,  // Ignored - Lance doesn't support nested
+            DenseVectorFieldMapper.FilterHeuristic heuristic,  // Ignored - Lance uses its own search strategy
+            boolean hnswEarlyTermination,  // Ignored - Lance doesn't use HNSW
+            String indexName,
+            int shardId,
+            int nprobes
+        ) {
             float[] vector = queryVector.isFloat() ? queryVector.asFloatVector() : toFloat(queryVector.asByteVector());
             if (vector.length != dims) {
                 throw new IllegalArgumentException("query vector dims mismatch expected=" + dims + " got=" + vector.length);
@@ -339,6 +374,7 @@ public class LanceVectorFieldMapper extends FieldMapper {
                 similarity,
                 filter,
                 dims,
+                nprobes,
                 prefilterHeuristic
             );
         }

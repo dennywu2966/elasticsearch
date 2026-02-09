@@ -90,6 +90,12 @@ public class VersionedDataset implements LanceDataset {
     }
 
     @Override
+    public List<Candidate> search(float[] queryVector, int k, String columnName, int nprobes, String sqlFilter, String similarity)
+        throws IOException {
+        return delegate.get().search(queryVector, k, columnName, nprobes, sqlFilter, similarity);
+    }
+
+    @Override
     public String uri() {
         return delegate.get().uri();
     }

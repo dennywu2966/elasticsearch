@@ -14,6 +14,8 @@ import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.core.Tuple;
 import org.elasticsearch.xcontent.XContentType;
 import org.elasticsearch.xpack.core.security.authc.AuthenticationToken;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
@@ -22,6 +24,8 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class CloudIamToken implements AuthenticationToken {
+    private static final Logger logger = LogManager.getLogger(CloudIamToken.class);
+
     private static final String PARAM_ACTION = "Action";
     private static final String PARAM_VERSION = "Version";
     private static final String PARAM_ACCESS_KEY_ID = "AccessKeyId";
@@ -62,7 +66,7 @@ public class CloudIamToken implements AuthenticationToken {
         this.nonce = nonce;
         this.signature = signature;
         this.sessionToken = sessionToken;
-        this.signedParams = signedParams;
+        this.signedParams = signedParams == null ? null : Map.copyOf(signedParams);
         this.oauthToken = oauthToken;
         this.valid = valid;
         this.validationError = validationError;
@@ -97,21 +101,19 @@ public class CloudIamToken implements AuthenticationToken {
             if (Strings.hasText(token)) {
                 // Log warning if both headers present (OAuth takes precedence)
                 if (hasSTS) {
-                    // Note: In production, this should use proper logger
-                    System.err.println("[CloudIamToken] Both Authorization and X-ES-IAM-Signed headers present. Using OAuth token.");
+                    logger.warn("Both Authorization and X-ES-IAM-Signed headers present; using OAuth token");
                 }
-                System.err.println("[CloudIamToken] Creating OAuth token: " + token.substring(0, Math.min(20, token.length())) + "...");
+                logger.debug("Creating OAuth token from Authorization header (prefix={}...)", token.substring(0, Math.min(8, token.length())));
                 return new CloudIamToken(null, null, null, null, null, null, token, true, null);
             }
         }
 
         // Fall back to STS signature
         if (signedHeader == null || signedHeader.isBlank()) {
-            System.err.println(
-                "[CloudIamToken] Missing authentication: signedHeader="
-                    + (signedHeader == null ? "null" : "empty")
-                    + ", authorizationHeader="
-                    + (authorizationHeader == null ? "null" : "empty")
+            logger.debug(
+                "Missing authentication headers: signedHeader={}, authorizationHeader={}",
+                signedHeader == null ? "null" : "empty",
+                authorizationHeader == null ? "null" : "empty"
             );
             return invalid("missing authentication: both signed header and bearer token are absent");
         }

@@ -13,6 +13,7 @@ import org.apache.lucene.search.Query;
 import org.apache.lucene.search.TermQuery;
 
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * Converts Elasticsearch filter queries to Lance SQL WHERE clauses for native filter pushdown.
@@ -42,6 +43,7 @@ import java.util.Map;
  * </pre>
  */
 public class EsToLanceFilterConverter {
+    private static final Pattern SAFE_COLUMN_NAME = Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]*$");
 
     /**
      * Convert an Elasticsearch filter query to a Lance SQL WHERE clause.
@@ -94,6 +96,7 @@ public class EsToLanceFilterConverter {
         if (lanceColumn == null) {
             throw new UnmappedFieldException(esFieldName);
         }
+        validateColumnName(esFieldName, lanceColumn);
 
         // Get the value as a string
         String value = termQuery.getTerm().text();
@@ -108,6 +111,10 @@ public class EsToLanceFilterConverter {
             // Boolean: use true/false without quotes
             return lanceColumn + " = " + Boolean.parseBoolean(value);
         } else if (isNumericValue(value)) {
+            double parsed = Double.parseDouble(value);
+            if (Double.isFinite(parsed) == false) {
+                throw new LanceFilterConversionException("Non-finite numeric values are not supported: " + value);
+            }
             // Numeric: use as-is without quotes
             return lanceColumn + " = " + value;
         } else {
@@ -162,6 +169,14 @@ public class EsToLanceFilterConverter {
             return true;
         } catch (NumberFormatException e) {
             return false;
+        }
+    }
+
+    private void validateColumnName(String esFieldName, String columnName) throws LanceFilterConversionException {
+        if (SAFE_COLUMN_NAME.matcher(columnName).matches() == false) {
+            throw new LanceFilterConversionException(
+                "Invalid Lance column name for field '" + esFieldName + "': " + columnName
+            );
         }
     }
 

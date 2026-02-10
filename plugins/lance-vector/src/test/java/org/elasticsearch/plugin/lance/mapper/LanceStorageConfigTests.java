@@ -11,6 +11,9 @@ package org.elasticsearch.plugin.lance.mapper;
 
 import org.elasticsearch.test.ESTestCase;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
 
@@ -129,5 +132,30 @@ public class LanceStorageConfigTests extends ESTestCase {
 
         assertThat(config.getShardingStrategy(), equalTo(LanceStorageConfig.ShardingStrategy.NONE));
         assertThat(config.getNumShards(), equalTo(5));
+    }
+
+    public void testFieldMappingIsDefensivelyCopiedAndImmutable() {
+        Map<String, String> originalMapping = new HashMap<>();
+        originalMapping.put("category", "product_category");
+
+        LanceStorageConfig config = new LanceStorageConfig(
+            "external",
+            "file:///path/to/dataset.lance",
+            "_id",
+            "vector",
+            null,
+            null,
+            null,
+            1,
+            originalMapping
+        );
+
+        // Mutating the source map after construction must not affect config state.
+        originalMapping.put("category", "mutated_category");
+        Map<String, String> exposed = config.getFieldMapping();
+        assertThat(exposed.get("category"), equalTo("product_category"));
+
+        // Returned mapping must be immutable.
+        expectThrows(UnsupportedOperationException.class, () -> exposed.put("brand", "brand_name"));
     }
 }

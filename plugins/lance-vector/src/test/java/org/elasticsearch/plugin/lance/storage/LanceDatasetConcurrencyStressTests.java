@@ -13,6 +13,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.test.ESTestCase;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -74,7 +75,7 @@ public class LanceDatasetConcurrencyStressTests extends ESTestCase {
         String uri = "file://" + tempFile.toString();
 
         // Load the dataset once
-        LanceDataset dataset = LanceDatasetRegistry.getOrLoad(uri, dims, LanceDatasetConfig.defaults());
+        LanceDataset dataset = loadFakeDataset(uri, dims);
 
         CyclicBarrier barrier = new CyclicBarrier(NUM_THREADS);
         ExecutorService executor = Executors.newFixedThreadPool(NUM_THREADS);
@@ -156,7 +157,7 @@ public class LanceDatasetConcurrencyStressTests extends ESTestCase {
                 try {
                     barrier.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS); // Synchronize start
                     // All threads try to load the same URI simultaneously
-                    return LanceDatasetRegistry.getOrLoad(uri, dims, LanceDatasetConfig.defaults());
+                    return loadFakeDataset(uri, dims);
                 } catch (Exception e) {
                     logger.error("Dataset loading failed: {}", e.getMessage(), e);
                     throw new RuntimeException(e);
@@ -217,7 +218,7 @@ public class LanceDatasetConcurrencyStressTests extends ESTestCase {
                 try {
                     // Phase 1: Load datasets concurrently
                     loadBarrier.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-                    LanceDataset dataset = LanceDatasetRegistry.getOrLoad(uri, 32, LanceDatasetConfig.defaults());
+                    LanceDataset dataset = loadFakeDataset(uri, 32);
                     assertNotNull("Dataset should be loaded", dataset);
 
                     // Phase 2: Query concurrently (some datasets may be evicted)
@@ -280,7 +281,7 @@ public class LanceDatasetConcurrencyStressTests extends ESTestCase {
                 try {
                     for (int cycle = 0; cycle < cycles; cycle++) {
                         // Load dataset
-                        LanceDataset dataset = LanceDatasetRegistry.getOrLoad(uri, dims, LanceDatasetConfig.defaults());
+                        LanceDataset dataset = loadFakeDataset(uri, dims);
                         assertNotNull("Dataset should load successfully", dataset);
 
                         // Query
@@ -363,7 +364,7 @@ public class LanceDatasetConcurrencyStressTests extends ESTestCase {
                         if (operation < 60) {
                             // 60%: Query
                             String uri = uris[Math.min(randomInt(numUris), numUris - 1)];
-                            LanceDataset dataset = LanceDatasetRegistry.getOrLoad(uri, 32, LanceDatasetConfig.defaults());
+                            LanceDataset dataset = loadFakeDataset(uri, 32);
                             float[] queryVector = randomVector(32);
                             List<LanceDataset.Candidate> results = dataset.search(queryVector, 5, "cosine");
                             assertNotNull("Results should not be null", results);
@@ -372,7 +373,7 @@ public class LanceDatasetConcurrencyStressTests extends ESTestCase {
                         } else if (operation < 90) {
                             // 30%: Load (cache hit or miss)
                             String uri = uris[Math.min(randomInt(numUris), numUris - 1)];
-                            LanceDataset dataset = LanceDatasetRegistry.getOrLoad(uri, 32, LanceDatasetConfig.defaults());
+                            LanceDataset dataset = loadFakeDataset(uri, 32);
                             assertNotNull("Dataset should load", dataset);
                             loadCount.incrementAndGet();
 
@@ -483,5 +484,15 @@ public class LanceDatasetConcurrencyStressTests extends ESTestCase {
 
         Files.writeString(tempFile, json.toString());
         return tempFile;
+    }
+
+    private LanceDataset loadFakeDataset(String uri, int dims) throws IOException {
+        return LanceDatasetRegistry.get(uri, () -> {
+            try {
+                return FakeLanceDataset.load(uri, dims);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        });
     }
 }

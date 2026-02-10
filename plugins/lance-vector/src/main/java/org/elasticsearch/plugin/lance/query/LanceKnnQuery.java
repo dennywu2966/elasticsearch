@@ -119,13 +119,21 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
      */
     public static VarCharVector createArrowIdVector(List<String> ids, BufferAllocator allocator) {
         VarCharVector vector = new VarCharVector("_id_filter", allocator);
-        vector.allocateNew(ids.size());
-        for (int i = 0; i < ids.size(); i++) {
-            byte[] bytes = ids.get(i).getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            vector.set(i, bytes);
+        boolean success = false;
+        try {
+            vector.allocateNew(ids.size());
+            for (int i = 0; i < ids.size(); i++) {
+                byte[] bytes = ids.get(i).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                vector.set(i, bytes);
+            }
+            vector.setValueCount(ids.size());
+            success = true;
+            return vector;
+        } finally {
+            if (success == false) {
+                vector.close();
+            }
         }
-        vector.setValueCount(ids.size());
-        return vector;
     }
 
     /**
@@ -568,22 +576,27 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
 
         // Keep only top k by score
         if (docScores.size() > k) {
-            return docScores.entrySet()
+            Map<Integer, Float> limited = docScores.entrySet()
                 .stream()
                 .sorted(Map.Entry.<Integer, Float>comparingByValue().reversed())
                 .limit(k)
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+            recordMetrics(overallStart, filter != null);
+            return limited;
         }
 
-        // Record metrics
-        long duration = System.nanoTime() - overallStart;
+        recordMetrics(overallStart, filter != null);
+
+        return docScores;
+    }
+
+    private static void recordMetrics(long overallStartNanos, boolean hadFilter) {
+        long duration = System.nanoTime() - overallStartNanos;
         LanceSearchMetrics.recordSearch(duration);
-        if (filter != null) {
+        if (hadFilter) {
             LanceSearchMetrics.recordFilteredSearch();
             LanceSearchMetrics.recordPostFilterSearch();
         }
-
-        return docScores;
     }
 
     /**

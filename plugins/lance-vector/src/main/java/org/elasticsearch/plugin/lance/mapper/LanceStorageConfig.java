@@ -12,6 +12,7 @@ package org.elasticsearch.plugin.lance.mapper;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.Collections;
 
 /**
  * Storage configuration for Lance vector fields.
@@ -53,7 +54,7 @@ public class LanceStorageConfig {
          * This guarantees a 1:1 mapping between ES shards and Lance dataset shards
          * when the Lance dataset was created using the same algorithm.
          * <p>
-         * ES uses: {@code shardId = Math.abs(Murmur3HashFunction.hash(document_id)) % numShards}
+         * ES uses: {@code shardId = Math.floorMod(Murmur3HashFunction.hash(document_id), numShards)}
          * <p>
          * Use this when your Lance dataset is sharded using the same Murmur3 algorithm.
          * This is the default for shard-aware storage configurations.
@@ -108,7 +109,7 @@ public class LanceStorageConfig {
         this.shardingStrategy = shardingStrategy != null
             ? shardingStrategy
             : (uriPrefix != null ? ShardingStrategy.ES_ROUTING : ShardingStrategy.NONE);
-        this.fieldMapping = fieldMapping; // Can be null (no filter pushdown)
+        this.fieldMapping = fieldMapping == null ? null : Collections.unmodifiableMap(new java.util.HashMap<>(fieldMapping));
 
         if (uriPrefix != null) {
             this.uri = null; // Shard-aware mode; uri resolved at query time

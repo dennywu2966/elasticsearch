@@ -85,7 +85,10 @@ public class OssStorageAdapter {
         }
 
         ObjectMapper mapper = new ObjectMapper();
-        JsonNode root = mapper.readTree(Files.newInputStream(path));
+        JsonNode root;
+        try (InputStream inputStream = Files.newInputStream(path)) {
+            root = mapper.readTree(inputStream);
+        }
 
         String accessKeyId = getRequiredField(root, "access_key_id", credentialsPath);
         String accessKeySecret = getRequiredField(root, "access_key_secret", credentialsPath);
@@ -162,11 +165,13 @@ public class OssStorageAdapter {
     /**
      * List objects with a given prefix (for discovering dataset files).
      *
-     * For Phase 1, this is a simplified implementation.
-     * Phase 2 should implement proper OSS list operations.
+     * OSS listing is not implemented in this Phase 1 adapter.
+     * Callers should rely on direct known paths, or upgrade to SDK-backed listing.
      */
     public String[] listObjects(String ossUri, String prefix) throws IOException {
-        // Phase 1: Return commonly expected Lance dataset files
-        return new String[] { "_latest.manifest", "data.lance", "_versions/1.manifest" };
+        throw new UnsupportedOperationException(
+            "OssStorageAdapter.listObjects is not implemented in Phase 1. "
+                + "Use direct object paths or add OSS SDK-backed listing support."
+        );
     }
 }

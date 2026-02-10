@@ -13,6 +13,9 @@ import org.elasticsearch.client.Request;
 import org.elasticsearch.client.RequestOptions;
 import org.elasticsearch.client.Response;
 import org.elasticsearch.client.ResponseException;
+import org.elasticsearch.common.settings.SecureString;
+import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.util.concurrent.ThreadContext;
 import org.elasticsearch.test.rest.ESRestTestCase;
 
 import java.io.IOException;
@@ -25,6 +28,16 @@ import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.is;
 
 public class CloudIamRealmIT extends ESRestTestCase {
+    @Override
+    protected Settings restAdminSettings() {
+        return Settings.builder()
+            .put(
+                ThreadContext.PREFIX + ".Authorization",
+                basicAuthHeaderValue("test_user", new SecureString("x-pack-test-password".toCharArray()))
+            )
+            .build();
+    }
+
     public void testAuthenticateWithMockHeader() throws IOException {
         Request request = new Request("GET", "/_security/_authenticate");
         RequestOptions.Builder options = RequestOptions.DEFAULT.toBuilder();

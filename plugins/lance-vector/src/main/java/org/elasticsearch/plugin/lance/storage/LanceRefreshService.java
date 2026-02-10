@@ -114,7 +114,7 @@ public class LanceRefreshService implements Closeable {
         try {
             refreshAll();
         } catch (Exception e) {
-            logger.warn("Lance refresh cycle failed: {}", e.getMessage());
+            logger.warn("Lance refresh cycle failed", e);
         } finally {
             scheduleNextRefresh();
         }

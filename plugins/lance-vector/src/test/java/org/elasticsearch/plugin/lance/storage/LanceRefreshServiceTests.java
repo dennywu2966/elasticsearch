@@ -17,6 +17,8 @@ import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Tests for LanceRefreshService background dataset refresh.
@@ -102,5 +104,132 @@ public class LanceRefreshServiceTests extends ESTestCase {
         service.setRefreshInterval(TimeValue.timeValueSeconds(10));
         assertEquals(TimeValue.timeValueSeconds(10), service.getRefreshInterval());
         service.stop();
+    }
+
+    public void testRefreshCycleContinuesAfterRefreshException() throws Exception {
+        CountingExecutorService countingExecutor = new CountingExecutorService();
+        LanceRefreshService service = new LanceRefreshService(countingExecutor) {
+            @Override
+            public void refreshAll() {
+                throw new RuntimeException("boom");
+            }
+        };
+
+        service.start();
+        assertTrue("First cycle should be scheduled", countingExecutor.runScheduledTask());
+        assertTrue("Next cycle should still be scheduled after exception", countingExecutor.runScheduledTask());
+        assertEquals("each cycle should execute refresh", 2, countingExecutor.executedTasks());
+        service.stop();
+    }
+
+    private static class CountingExecutorService extends java.util.concurrent.AbstractExecutorService implements ScheduledExecutorService {
+        private final java.util.concurrent.atomic.AtomicBoolean shutdown = new java.util.concurrent.atomic.AtomicBoolean(false);
+        private final java.util.concurrent.atomic.AtomicInteger executedTasks = new java.util.concurrent.atomic.AtomicInteger(0);
+        private final java.util.concurrent.LinkedBlockingQueue<Runnable> tasks = new java.util.concurrent.LinkedBlockingQueue<>();
+
+        @Override
+        public void shutdown() {
+            shutdown.set(true);
+        }
+
+        @Override
+        public java.util.List<Runnable> shutdownNow() {
+            shutdown.set(true);
+            java.util.ArrayList<Runnable> drained = new java.util.ArrayList<>();
+            tasks.drainTo(drained);
+            return drained;
+        }
+
+        @Override
+        public boolean isShutdown() {
+            return shutdown.get();
+        }
+
+        @Override
+        public boolean isTerminated() {
+            return shutdown.get();
+        }
+
+        @Override
+        public boolean awaitTermination(long timeout, TimeUnit unit) {
+            return shutdown.get();
+        }
+
+        @Override
+        public void execute(Runnable command) {
+            command.run();
+        }
+
+        @Override
+        public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
+            tasks.offer(command);
+            return new CompletedScheduledFuture();
+        }
+
+        @Override
+        public <V> ScheduledFuture<V> schedule(java.util.concurrent.Callable<V> callable, long delay, TimeUnit unit) {
+            throw new UnsupportedOperationException("Not needed in test");
+        }
+
+        @Override
+        public ScheduledFuture<?> scheduleAtFixedRate(Runnable command, long initialDelay, long period, TimeUnit unit) {
+            throw new UnsupportedOperationException("Not needed in test");
+        }
+
+        @Override
+        public ScheduledFuture<?> scheduleWithFixedDelay(Runnable command, long initialDelay, long delay, TimeUnit unit) {
+            throw new UnsupportedOperationException("Not needed in test");
+        }
+
+        boolean runScheduledTask() {
+            Runnable task = tasks.poll();
+            if (task == null) {
+                return false;
+            }
+            executedTasks.incrementAndGet();
+            task.run();
+            return true;
+        }
+
+        int executedTasks() {
+            return executedTasks.get();
+        }
+    }
+
+    private static class CompletedScheduledFuture implements ScheduledFuture<Object> {
+        @Override
+        public long getDelay(TimeUnit unit) {
+            return 0;
+        }
+
+        @Override
+        public int compareTo(java.util.concurrent.Delayed o) {
+            return 0;
+        }
+
+        @Override
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            return false;
+        }
+
+        @Override
+        public boolean isCancelled() {
+            return false;
+        }
+
+        @Override
+        public boolean isDone() {
+            return true;
+        }
+
+        @Override
+        public Object get() {
+            return null;
+        }
+
+        @Override
+        public Object get(long timeout, TimeUnit unit) {
+            return null;
+        }
     }
 }

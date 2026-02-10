@@ -25,6 +25,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Validates Aliyun OAuth 2.1 access tokens by calling the userinfo endpoint.
@@ -47,6 +48,12 @@ public class OAuthTokenValidator implements IamClient {
             .build();
     }
 
+    OAuthTokenValidator(String userinfoEndpoint, TimeValue readTimeout, HttpClient httpClient) {
+        this.userinfoEndpoint = Objects.requireNonNull(userinfoEndpoint);
+        this.readTimeout = Objects.requireNonNull(readTimeout);
+        this.httpClient = Objects.requireNonNull(httpClient);
+    }
+
     @Override
     public void verify(CloudIamToken token, ActionListener<IamPrincipal> listener) {
         String accessToken = token.oauthToken();
@@ -55,24 +62,44 @@ public class OAuthTokenValidator implements IamClient {
             return;
         }
 
+        final HttpRequest request;
         try {
-            HttpRequest request = HttpRequest.newBuilder(URI.create(userinfoEndpoint))
+            request = HttpRequest.newBuilder(URI.create(userinfoEndpoint))
                 .timeout(Duration.ofMillis(readTimeout.getMillis()))
                 .header("Authorization", "Bearer " + accessToken)
                 .header("Accept", "application/json")
                 .GET()
                 .build();
+        } catch (IllegalArgumentException e) {
+            listener.onFailure(new IllegalStateException("invalid OAuth userinfo endpoint: " + userinfoEndpoint, e));
+            return;
+        }
 
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-
-            if (response.statusCode() != 200) {
-                listener.onFailure(new IllegalStateException("OAuth token validation failed with status " + response.statusCode()));
-                return;
-            }
-
-            listener.onResponse(parseUserInfo(response.body()));
-        } catch (Exception e) {
+        final HttpResponse<String> response;
+        try {
+            response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            listener.onFailure(new IOException("OAuth token validation interrupted", e));
+            return;
+        } catch (IOException e) {
             listener.onFailure(e);
+            return;
+        }
+
+        if (response.statusCode() != 200) {
+            listener.onFailure(new IllegalStateException("OAuth token validation failed with status " + response.statusCode()));
+            return;
+        }
+
+        try {
+            listener.onResponse(parseUserInfo(response.body()));
+        } catch (IOException e) {
+            listener.onFailure(e);
+        } catch (IllegalStateException e) {
+            listener.onFailure(e);
+        } catch (RuntimeException e) {
+            listener.onFailure(new IllegalStateException("Failed to parse OAuth userinfo response", e));
         }
     }
 

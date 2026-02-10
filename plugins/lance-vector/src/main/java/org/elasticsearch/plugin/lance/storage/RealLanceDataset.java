@@ -269,14 +269,14 @@ public class RealLanceDataset implements LanceDataset {
                 );
                 logger.debug("Environment variable {} set via reflection to: {}", name, value != null ? "***" : null);
             }
-        } catch (Exception e) {
-            logger.warn(
-                "Failed to set environment variable {} via reflection: {}. "
-                    + "This may cause OSS authentication failures. "
-                    + "Set environment variables in the parent shell before starting ES. "
+        } catch (NoSuchFieldException | IllegalAccessException | ClassCastException | SecurityException e) {
+            throw new IllegalStateException(
+                "Failed to set environment variable ["
+                    + name
+                    + "] via reflection fallback. This may cause OSS authentication failures. "
+                    + "Set OSS environment variables in the parent shell before starting ES. "
                     + "See plugins/lance-vector/ENVIRONMENT_VARIABLE_SETUP.md for details.",
-                name,
-                e.getMessage()
+                e
             );
         }
     }
@@ -307,8 +307,8 @@ public class RealLanceDataset implements LanceDataset {
             List<String> indexNames = dataset.listIndexes();
             // Check if any index name contains the vector column name or "vector"
             return indexNames.stream().anyMatch(indexName -> indexName.contains(vectorColumn) || indexName.contains("vector"));
-        } catch (Exception e) {
-            logger.debug("Could not check index status: {}", e.getMessage());
+        } catch (RuntimeException e) {
+            logger.warn("Could not determine Lance index status for column [{}], falling back to brute-force search", vectorColumn, e);
             return false;
         }
     }
@@ -353,16 +353,10 @@ public class RealLanceDataset implements LanceDataset {
         if (idFilter == null) {
             return search(queryVector, k, "cosine");
         }
-
-        // TODO: Implement Lance SDK pre-filter using native filter pushdown
-        // Lance SDK 1.0.0-beta.2 may not support ID-based pre-filtering yet
-        // For now, fall back to unfiltered search
-        logger.warn(
-            "Pre-filter search requested with {} IDs, but Lance SDK filter pushdown not yet implemented. "
-                + "Falling back to unfiltered search. Post-filtering will be applied in LanceKnnQuery.",
-            idFilter.getValueCount()
+        throw new UnsupportedOperationException(
+            "ID pre-filter pushdown is not implemented by the current Lance SDK integration. "
+                + "Use SQL pushdown or ES post-filtering path instead."
         );
-        return search(queryVector, k, "cosine");
     }
 
     @Override
@@ -521,10 +515,10 @@ public class RealLanceDataset implements LanceDataset {
         }
 
         if (distVector == null) {
-            logger.error(
-                "Distance column not found in Lance scan results! Tried '_distance' and 'distance'. Available: {}",
-                batch.getSchema().getFields().stream().map(f -> f.getName()).toList()
-            );
+            String message = "Distance column not found in Lance scan results. Tried '_distance' and 'distance'. Available: "
+                + batch.getSchema().getFields().stream().map(Field::getName).toList();
+            logger.error(message);
+            throw new IllegalStateException(message);
         }
 
         for (int i = 0; i < batch.getRowCount(); i++) {
@@ -532,8 +526,12 @@ public class RealLanceDataset implements LanceDataset {
                 continue;
             }
 
+            if (distVector.isNull(i)) {
+                throw new IllegalStateException("Distance value is null at row " + i + " for dataset " + uri);
+            }
+
             String id = new String(idVector.get(i), StandardCharsets.UTF_8);
-            float distance = (distVector != null && !distVector.isNull(i)) ? distVector.get(i) : 0f;
+            float distance = distVector.get(i);
             float score = distanceToScore(distance, similarity);
             candidates.add(new Candidate(id, score));
         }

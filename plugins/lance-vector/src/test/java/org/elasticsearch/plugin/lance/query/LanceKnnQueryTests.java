@@ -33,6 +33,7 @@ import org.elasticsearch.plugin.lance.storage.LanceDatasetRegistry;
 import org.elasticsearch.plugin.lance.storage.LanceRefreshService;
 import org.elasticsearch.test.ESTestCase;
 
+import java.io.IOException;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
@@ -42,6 +43,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
@@ -491,6 +494,123 @@ public class LanceKnnQueryTests extends ESTestCase {
         }
     }
 
+    public void testSearchMetricsRecordedWhenResultsAreTrimmedToTopK() throws Exception {
+        LanceSearchMetrics.reset();
+
+        String uri = "embedded:metrics-trimmed";
+        CountingDataset dataset = new CountingDataset(
+            List.of(
+                new LanceDataset.Candidate("doc1", 1.0f),
+                new LanceDataset.Candidate("doc2", 0.9f),
+                new LanceDataset.Candidate("doc3", 0.8f)
+            )
+        );
+        LanceDatasetRegistry.get(uri, () -> dataset);
+
+        LanceStorageConfig storageConfig = new LanceStorageConfig("external", uri, "_id", "vector", null, null, null, 1, null);
+        LanceKnnQuery query = new LanceKnnQuery(
+            "embedding",
+            storageConfig,
+            "products",
+            0,
+            new float[] { 1.0f, 0.0f, 0.0f },
+            1,   // k
+            10,  // numCandidates
+            "cosine",
+            null,
+            3,
+            PreFilterHeuristic.AUTO
+        );
+
+        try (Directory directory = new ByteBuffersDirectory(); IndexWriter writer = new IndexWriter(directory, new IndexWriterConfig())) {
+            addIdDoc(writer, "doc1");
+            addIdDoc(writer, "doc2");
+            addIdDoc(writer, "doc3");
+            writer.commit();
+
+            try (DirectoryReader reader = DirectoryReader.open(writer)) {
+                IndexSearcher searcher = new IndexSearcher(reader);
+                searcher.search(query, 5);
+            }
+        }
+
+        assertThat("total searches should be recorded even when docScores are trimmed", LanceSearchMetrics.getTotalSearches(), equalTo(1L));
+    }
+
+    public void testNativeSearchTimeoutFailsFast() throws Exception {
+        String timeoutProp = "es.lance.search_lock_timeout_millis";
+        String originalValue = System.getProperty(timeoutProp);
+        System.setProperty(timeoutProp, "50");
+        try {
+            String uri = "embedded:lock-timeout";
+            CountingDataset dataset = new CountingDataset(List.of(new LanceDataset.Candidate("doc1", 1.0f)));
+            LanceDatasetRegistry.get(uri, () -> dataset);
+
+            ReentrantReadWriteLock guard = getRegistryQueryRefreshGuard();
+            Lock writeLock = guard.writeLock();
+            CountDownLatch locked = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            Thread blocker = new Thread(() -> {
+                writeLock.lock();
+                try {
+                    locked.countDown();
+                    release.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    writeLock.unlock();
+                }
+            });
+            blocker.start();
+            assertTrue("write lock should be acquired", locked.await(5, TimeUnit.SECONDS));
+            try {
+                LanceStorageConfig storageConfig = new LanceStorageConfig("external", uri, "_id", "vector", null, null, null, 1, null);
+                LanceKnnQuery query = new LanceKnnQuery(
+                    "embedding",
+                    storageConfig,
+                    "products",
+                    0,
+                    new float[] { 1.0f, 0.0f, 0.0f },
+                    1,
+                    10,
+                    "cosine",
+                    null,
+                    3,
+                    PreFilterHeuristic.AUTO
+                );
+
+                try (Directory directory = new ByteBuffersDirectory();
+                    IndexWriter writer = new IndexWriter(directory, new IndexWriterConfig())) {
+                    addIdDoc(writer, "doc1");
+                    writer.commit();
+
+                    try (DirectoryReader reader = DirectoryReader.open(writer)) {
+                        IndexSearcher searcher = new IndexSearcher(reader);
+                        IOException e = expectThrows(IOException.class, () -> searcher.search(query, 5));
+                        assertThat(e.getMessage(), containsString("Timed out acquiring Lance search lock"));
+                    }
+                }
+            } finally {
+                release.countDown();
+                blocker.join(5000);
+            }
+        } finally {
+            if (originalValue == null) {
+                System.clearProperty(timeoutProp);
+            } else {
+                System.setProperty(timeoutProp, originalValue);
+            }
+        }
+    }
+
+    public void testCreateArrowIdVectorReleasesMemoryOnFailure() {
+        try (org.apache.arrow.memory.RootAllocator allocator = new org.apache.arrow.memory.RootAllocator(64)) {
+            List<String> ids = List.of("x".repeat(1_000_000));
+            expectThrows(RuntimeException.class, () -> LanceKnnQuery.createArrowIdVector(ids, allocator));
+            assertThat("allocator memory should be released when vector creation fails", allocator.getAllocatedMemory(), equalTo(0L));
+        }
+    }
+
     private static FieldType createIdFieldType() {
         FieldType type = new FieldType();
         type.setTokenized(false);
@@ -503,6 +623,12 @@ public class LanceKnnQueryTests extends ESTestCase {
         Document document = new Document();
         document.add(new Field(IdFieldMapper.NAME, Uid.encodeId(id), ID_FIELD_TYPE));
         writer.addDocument(document);
+    }
+
+    private static ReentrantReadWriteLock getRegistryQueryRefreshGuard() throws Exception {
+        java.lang.reflect.Field guardField = LanceDatasetRegistry.class.getDeclaredField("QUERY_REFRESH_GUARD");
+        guardField.setAccessible(true);
+        return (ReentrantReadWriteLock) guardField.get(null);
     }
 
     private static final class CountingDataset implements LanceDataset {
@@ -652,4 +778,5 @@ public class LanceKnnQueryTests extends ESTestCase {
             allowSearchToFinish.countDown();
         }
     }
+
 }

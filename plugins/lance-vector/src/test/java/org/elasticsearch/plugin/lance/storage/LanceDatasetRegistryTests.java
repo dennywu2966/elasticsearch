@@ -15,7 +15,9 @@ import org.hamcrest.Matchers;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 import static org.hamcrest.Matchers.containsString;
@@ -50,7 +52,7 @@ public class LanceDatasetRegistryTests extends ESTestCase {
         for (int i = 0; i < 5; i++) {
             Path tempFile = createTempJsonDataset(32, 10, suffix + "-" + i);
             String uri = "file://" + tempFile.toString();
-            LanceDatasetRegistry.getOrLoad(uri, 32, LanceDatasetConfig.defaults());
+            loadFakeDataset(uri, 32);
         }
 
         int sizeBefore = LanceDatasetRegistry.size();
@@ -77,7 +79,7 @@ public class LanceDatasetRegistryTests extends ESTestCase {
         assertFalse("URI should not be cached initially", LanceDatasetRegistry.contains(uri));
 
         // After load, should be cached
-        LanceDatasetRegistry.getOrLoad(uri, dims, LanceDatasetConfig.defaults());
+        loadFakeDataset(uri, dims);
 
         assertTrue("URI should be cached after load", LanceDatasetRegistry.contains(uri));
     }
@@ -192,11 +194,11 @@ public class LanceDatasetRegistryTests extends ESTestCase {
         String uri = "file://" + tempFile.toString();
 
         // Load once
-        LanceDataset dataset1 = LanceDatasetRegistry.getOrLoad(uri, dims, LanceDatasetConfig.defaults());
+        LanceDataset dataset1 = loadFakeDataset(uri, dims);
         assertNotNull("First load should return dataset", dataset1);
 
         // Load again
-        LanceDataset dataset2 = LanceDatasetRegistry.getOrLoad(uri, dims, LanceDatasetConfig.defaults());
+        LanceDataset dataset2 = loadFakeDataset(uri, dims);
         assertNotNull("Second load should return dataset", dataset2);
 
         // Should be the same instance
@@ -214,7 +216,7 @@ public class LanceDatasetRegistryTests extends ESTestCase {
             String suffix = "test-eviction-" + i;
             uris[i] = "file://" + createTempJsonDataset(32, 10, suffix).toString();
             try {
-                LanceDatasetRegistry.getOrLoad(uris[i], 32, LanceDatasetConfig.defaults());
+                loadFakeDataset(uris[i], 32);
             } catch (IOException e) {
                 // Expected if file doesn't exist
             }
@@ -236,6 +238,23 @@ public class LanceDatasetRegistryTests extends ESTestCase {
         int dims = 64;
 
         expectThrows(Exception.class, () -> { LanceDatasetRegistry.getOrLoad(uri, dims, LanceDatasetConfig.defaults()); });
+    }
+
+    public void testGetOrLoadRejectsNonLanceUris() {
+        String uri = "file:///tmp/not-a-lance.json";
+        String property = "es.lance.allow_file_json_fallback_for_tests";
+        String original = System.getProperty(property);
+        System.clearProperty(property);
+        try {
+            IOException e = expectThrows(IOException.class, () -> LanceDatasetRegistry.getOrLoad(uri, 64, LanceDatasetConfig.defaults()));
+            assertThat(e.getMessage(), containsString("Unsupported Lance dataset URI"));
+        } finally {
+            if (original == null) {
+                System.clearProperty(property);
+            } else {
+                System.setProperty(property, original);
+            }
+        }
     }
 
     public void testGetOrLoadWithLoaderThrowsException() throws IOException {
@@ -264,7 +283,7 @@ public class LanceDatasetRegistryTests extends ESTestCase {
         Path tempFile = createTempJsonDataset(32, 10, suffix);
         String uri = "file://" + tempFile.toString();
 
-        LanceDataset dataset = LanceDatasetRegistry.getOrLoad(uri, 32, LanceDatasetConfig.defaults());
+        LanceDataset dataset = loadFakeDataset(uri, 32);
         assertNotNull("Dataset should be loaded", dataset);
 
         // Close once
@@ -275,6 +294,17 @@ public class LanceDatasetRegistryTests extends ESTestCase {
 
         // Clean up
         LanceDatasetRegistry.invalidate(uri);
+    }
+
+    public void testInvalidateClosesDatasetOnlyOnce() throws Exception {
+        LanceDatasetRegistry.clear();
+        String uri = "unit://close-once-" + randomAlphaOfLength(8);
+        CountingCloseDataset dataset = new CountingCloseDataset();
+
+        LanceDatasetRegistry.get(uri, () -> dataset);
+        LanceDatasetRegistry.invalidate(uri);
+
+        assertThat("invalidate should trigger exactly one close", dataset.closeCount.get(), equalTo(1));
     }
 
     // ========== Thread Safety Tests ==========
@@ -294,7 +324,7 @@ public class LanceDatasetRegistryTests extends ESTestCase {
             new Thread(() -> {
                 try {
                     barrier.await();
-                    LanceDataset dataset = LanceDatasetRegistry.getOrLoad(uri, dims, LanceDatasetConfig.defaults());
+                    LanceDataset dataset = loadFakeDataset(uri, dims);
                     assertNotNull("Dataset should load successfully", dataset);
                     latch.countDown();
                 } catch (Exception e) {
@@ -326,7 +356,7 @@ public class LanceDatasetRegistryTests extends ESTestCase {
         int dims = 0; // Edge case: zero dimensions means auto-detect
 
         // Should load successfully (dims=0 means auto-detect)
-        LanceDataset dataset = LanceDatasetRegistry.getOrLoad(uri, dims, LanceDatasetConfig.defaults());
+        LanceDataset dataset = loadFakeDataset(uri, dims);
         assertNotNull("Dataset should load even with dims=0 (auto-detect)", dataset);
     }
 
@@ -386,5 +416,54 @@ public class LanceDatasetRegistryTests extends ESTestCase {
 
         Files.writeString(tempFile, json.toString());
         return tempFile;
+    }
+
+    private LanceDataset loadFakeDataset(String uri, int dims) throws IOException {
+        return LanceDatasetRegistry.get(uri, () -> {
+            try {
+                return FakeLanceDataset.load(uri, dims);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
+    private static class CountingCloseDataset implements LanceDataset {
+        private final AtomicInteger closeCount = new AtomicInteger(0);
+
+        @Override
+        public int dims() {
+            return 0;
+        }
+
+        @Override
+        public List<Candidate> search(float[] query, int numCandidates, String similarity) {
+            return List.of();
+        }
+
+        @Override
+        public List<Candidate> search(float[] queryVector, int k, String columnName, org.apache.arrow.vector.VarCharVector idFilter) {
+            return List.of();
+        }
+
+        @Override
+        public List<Candidate> search(float[] queryVector, int k, String columnName, int nprobes) {
+            return List.of();
+        }
+
+        @Override
+        public List<Candidate> search(float[] queryVector, int k, String columnName, String sqlFilter) {
+            return List.of();
+        }
+
+        @Override
+        public String uri() {
+            return "unit://dataset";
+        }
+
+        @Override
+        public void close() {
+            closeCount.incrementAndGet();
+        }
     }
 }

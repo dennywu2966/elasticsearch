@@ -13,6 +13,7 @@ import org.elasticsearch.test.ESTestCase;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.Map;
 
 import static org.hamcrest.Matchers.is;
 
@@ -126,5 +127,27 @@ public class CloudIamTokenTests extends ESTestCase {
         CloudIamToken token = CloudIamToken.fromHeaders(header, 8192);
         assertThat(token.isValid(), is(true));
         assertThat(token.sessionToken(), is("sts-token"));
+    }
+
+    public void testSignedParamsIsImmutableCopy() {
+        String json = """
+            {
+              "Action": "GetCallerIdentity",
+              "Version": "2015-04-01",
+              "AccessKeyId": "AKID",
+              "Signature": "mock",
+              "SignatureMethod": "HMAC-SHA1",
+              "SignatureVersion": "1.0",
+              "SignatureNonce": "abc",
+              "Timestamp": "2025-01-01T00:00:00Z"
+            }
+            """;
+
+        String header = Base64.getEncoder().encodeToString(json.getBytes(StandardCharsets.UTF_8));
+        CloudIamToken token = CloudIamToken.fromHeaders(header, 8192);
+        Map<String, String> params = token.signedParams();
+
+        assertThat(params.get("AccessKeyId"), is("AKID"));
+        expectThrows(UnsupportedOperationException.class, () -> params.put("newKey", "newValue"));
     }
 }

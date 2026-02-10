@@ -18,7 +18,10 @@ import org.elasticsearch.common.cache.RemovalNotification;
 import org.elasticsearch.core.TimeValue;
 
 import java.io.IOException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Supplier;
@@ -26,17 +29,14 @@ import java.util.function.Supplier;
 /**
  * Unified registry for Lance datasets with caching support.
  * <p>
- * This registry manages both {@link RealLanceDataset} (for .lance format files)
- * and {@link FakeLanceDataset} (for JSON test files), providing a single entry
- * point for dataset access with automatic caching.
+ * This registry manages cached production datasets and coordinates loading.
  * <p>
  * Thread-safe: Uses Elasticsearch's Cache with automatic eviction to prevent
  * unbounded memory growth. Datasets are evicted based on LRU policy when the
  * cache reaches its maximum size.
  * <p>
- * <b>Concurrency Model:</b> Uses double-checked locking for thread-safe
- * dataset loading. The loading state is tracked in a separate map to prevent
- * multiple threads from loading the same dataset simultaneously.
+ * <b>Concurrency Model:</b> Uses per-URI {@link CompletableFuture} coordination
+ * to ensure only one load operation is in-flight for a given URI at any time.
  */
 public class LanceDatasetRegistry {
     private static final Logger logger = LogManager.getLogger(LanceDatasetRegistry.class);
@@ -50,11 +50,13 @@ public class LanceDatasetRegistry {
     // Use Elasticsearch's Cache with automatic eviction
     private static volatile Cache<String, LanceDataset> CACHE;
 
-    // Tracks which datasets are currently being loaded to prevent duplicate loads
-    private static final ConcurrentHashMap<String, Object> LOADING_URIS = new ConcurrentHashMap<>();
+    // Tracks in-flight per-URI load operations to prevent duplicate loads.
+    private static final ConcurrentHashMap<String, CompletableFuture<LanceDataset>> LOADING_DATASETS = new ConcurrentHashMap<>();
 
     // Guards refresh invalidation (write) against active query/search execution (read).
     private static final ReentrantReadWriteLock QUERY_REFRESH_GUARD = new ReentrantReadWriteLock();
+    private static final long DEFAULT_SEARCH_LOCK_TIMEOUT_MILLIS = TimeValue.timeValueSeconds(30).millis();
+    private static final String SEARCH_LOCK_TIMEOUT_SYS_PROP = "es.lance.search_lock_timeout_millis";
 
     @FunctionalInterface
     public interface IOAction<T> {
@@ -91,8 +93,7 @@ public class LanceDatasetRegistry {
             } catch (IOException e) {
                 logger.warn("Failed to close evicted dataset {}: {}", uri, e.getMessage());
             } finally {
-                // Clear loading state to allow re-loading if needed
-                LOADING_URIS.remove(uri);
+                LOADING_DATASETS.remove(uri);
             }
         }
     };
@@ -119,8 +120,8 @@ public class LanceDatasetRegistry {
      * If the dataset is already cached, returns the cached instance.
      * Otherwise, calls the loader to create the dataset and caches it.
      * <p>
-     * Thread-safe: Uses double-checked locking with a loading marker to prevent
-     * multiple threads from loading the same dataset simultaneously.
+     * Thread-safe: in-flight loads are coordinated via {@link CompletableFuture}
+     * so all concurrent callers for the same URI share a single load operation.
      *
      * @param uri    Dataset URI (used as cache key)
      * @param loader Supplier that loads the dataset if not cached
@@ -130,62 +131,62 @@ public class LanceDatasetRegistry {
     public static LanceDataset get(String uri, Supplier<LanceDataset> loader) throws IOException {
         Cache<String, LanceDataset> cache = getCache();
 
-        // Fast path: check cache without synchronization
         LanceDataset cached = cache.get(uri);
         if (cached != null) {
             return cached;
         }
 
-        // Slow path: synchronize to prevent duplicate loads
-        synchronized (uri.intern()) {  // Intern URI for per-URI locking
-            // Double-check: another thread may have loaded while we waited
-            cached = cache.get(uri);
-            if (cached != null) {
-                return cached;
-            }
+        CompletableFuture<LanceDataset> newLoad = new CompletableFuture<>();
+        CompletableFuture<LanceDataset> existingLoad = LOADING_DATASETS.putIfAbsent(uri, newLoad);
 
-            // Check if already loading (rare race condition)
-            if (LOADING_URIS.putIfAbsent(uri, uri) != null) {
-                // Another thread is loading this dataset, wait and retry
-                try {
-                    Thread.sleep(10);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("Interrupted while waiting for dataset load: " + uri, e);
-                }
-                // Retry after short wait
-                cached = cache.get(uri);
-                if (cached != null) {
-                    return cached;
-                }
-                // If still not loaded, continue with loading
-            }
-
+        if (existingLoad == null) {
             try {
+                LanceDataset loaded = cache.get(uri);
+                if (loaded != null) {
+                    newLoad.complete(loaded);
+                    return loaded;
+                }
                 logger.debug("Loading dataset into registry: {}", uri);
                 LanceDataset dataset = loader.get();
                 cache.put(uri, dataset);
+                newLoad.complete(dataset);
                 return dataset;
+            } catch (Throwable t) {
+                newLoad.completeExceptionally(t);
+                if (t instanceof RuntimeException runtimeException) {
+                    throw runtimeException;
+                }
+                if (t instanceof Error error) {
+                    throw error;
+                }
+                throw new IOException("Failed to load dataset: " + uri, t);
             } finally {
-                // Clear loading state
-                LOADING_URIS.remove(uri);
+                LOADING_DATASETS.remove(uri, newLoad);
             }
+        }
+
+        try {
+            return existingLoad.join();
+        } catch (CompletionException e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw new IOException("Failed to load dataset: " + uri, cause);
         }
     }
 
     /**
      * Get a dataset from the registry, loading it if necessary.
      * <p>
-     * Automatically selects the appropriate dataset type based on URI:
+     * Loads real Lance datasets in production paths.
      * <ul>
-     *   <li>Object storage URIs (oss://, s3://) → RealLanceDataset</li>
-     *   <li>Local file:// URIs ending with .lance or containing .lance/ → RealLanceDataset</li>
-     *   <li>URIs starting with embedded: → FakeLanceDataset (embedded JSON for testing)</li>
-     *   <li>Other URIs → FakeLanceDataset (external JSON file for testing)</li>
+     *   <li>Object storage URIs (oss://) ending with .lance or containing .lance/</li>
+     *   <li>Local file paths ending with .lance or containing .lance/</li>
+     *   <li>URIs starting with embedded: are test fixtures backed by FakeLanceDataset</li>
      * </ul>
      * <p>
-     * <b>IMPORTANT:</b> Object storage URIs must always use RealLanceDataset, never FakeLanceDataset.
-     * FakeLanceDataset is only for test fixtures and should not be used in production code paths.
+     * Non-Lance URIs fail fast to avoid silently switching to mock/test fixtures.
      *
      * @param uri Dataset URI
      * @param dims Expected vector dimensions
@@ -194,13 +195,46 @@ public class LanceDatasetRegistry {
      * @throws IOException if loading fails
      */
     public static LanceDataset getOrLoad(String uri, int dims, LanceDatasetConfig config) throws IOException {
+        if (uri != null && uri.startsWith("embedded:")) {
+            return get(uri, () -> {
+                try {
+                    return FakeLanceDataset.load(uri, dims);
+                } catch (IOException e) {
+                    throw new RuntimeException("Failed to load embedded test dataset: " + uri, e);
+                }
+            });
+        }
+
+        if (isLanceFormat(uri) == false) {
+            if (allowTestJsonFallback(uri)) {
+                logger.warn("Using test-only JSON Lance fallback for URI [{}]", uri);
+                return get(uri, () -> {
+                    try {
+                        return FakeLanceDataset.load(uri, dims);
+                    } catch (IOException e) {
+                        throw new RuntimeException("Failed to load test JSON dataset: " + uri, e);
+                    }
+                });
+            }
+            throw new IOException("Unsupported Lance dataset URI [" + uri + "]. Expected a .lance dataset path.");
+        }
+
+        LanceDatasetConfig effectiveConfig = config;
+        if (effectiveConfig.expectedDims() == 0 && dims > 0) {
+            effectiveConfig = new LanceDatasetConfig(
+                effectiveConfig.idColumn(),
+                effectiveConfig.vectorColumn(),
+                dims,
+                effectiveConfig.ossEndpoint(),
+                effectiveConfig.ossAccessKeyId(),
+                effectiveConfig.ossAccessKeySecret()
+            );
+        }
+
+        LanceDatasetConfig finalConfig = effectiveConfig;
         return get(uri, () -> {
             try {
-                if (isLanceFormat(uri)) {
-                    return RealLanceDataset.open(uri, config);
-                } else {
-                    return FakeLanceDataset.load(uri, dims);
-                }
+                return RealLanceDataset.open(uri, finalConfig);
             } catch (IOException e) {
                 throw new RuntimeException("Failed to load dataset: " + uri, e);
             }
@@ -218,17 +252,19 @@ public class LanceDatasetRegistry {
      * </ul>
      * <p>
      * <b>IMPORTANT:</b> Object storage URIs must end with .lance or contain .lance/
-     * to be considered Lance datasets. Files with other extensions (like .json)
-     * are assumed to be test fixtures.
+     * to be considered Lance datasets.
      * <p>
-     * <b>Note:</b> S3 URIs are not yet supported and will fall back to FakeLanceDataset
-     * for testing purposes.
+     * <b>Note:</b> S3 URIs are currently treated as unsupported in this plugin.
      *
      * @param uri Dataset URI to check
      * @return true if the URI should use RealLanceDataset, false for test JSON files
      */
     public static boolean isLanceFormat(String uri) {
-        // S3 is not yet supported - return false to use FakeLanceDataset for testing
+        if (uri == null || uri.isBlank()) {
+            return false;
+        }
+
+        // S3 is not yet supported in this plugin.
         if (uri.startsWith("s3://")) {
             return false;
         }
@@ -252,24 +288,16 @@ public class LanceDatasetRegistry {
      * Invalidate and close a specific dataset from the cache.
      * <p>
      * This method is thread-safe and can be called while other threads are
-     * accessing the dataset. The dataset will be closed before being removed.
+     * accessing the dataset. Dataset close is handled by the cache removal listener.
      *
      * @param uri Dataset URI to invalidate
      */
     public static void invalidate(String uri) {
         withRefreshLock(() -> {
             Cache<String, LanceDataset> cache = getCache();
-            LanceDataset removed = cache.get(uri);
-            if (removed != null) {
-                try {
-                    logger.debug("Invalidating dataset from registry: {}", uri);
-                    removed.close();
-                } catch (IOException e) {
-                    logger.warn("Error closing invalidated dataset {}: {}", uri, e.getMessage());
-                }
-            }
+            logger.debug("Invalidating dataset from registry: {}", uri);
             cache.invalidate(uri);
-            LOADING_URIS.remove(uri);
+            LOADING_DATASETS.remove(uri);
         });
     }
 
@@ -290,7 +318,7 @@ public class LanceDatasetRegistry {
 
             // The removal listener will handle closing all datasets
             cache.invalidateAll();
-            LOADING_URIS.clear();
+            LOADING_DATASETS.clear();
         });
     }
 
@@ -299,12 +327,37 @@ public class LanceDatasetRegistry {
      */
     public static <T> T withSearchLock(IOAction<T> action) throws IOException {
         Lock readLock = QUERY_REFRESH_GUARD.readLock();
-        readLock.lock();
+        long timeoutMillis = searchLockTimeoutMillis();
+        boolean acquired = false;
         try {
+            acquired = readLock.tryLock(timeoutMillis, TimeUnit.MILLISECONDS);
+            if (acquired == false) {
+                throw new IOException("Timed out acquiring Lance search lock after " + timeoutMillis + "ms");
+            }
             return action.run();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while waiting for Lance search lock", e);
         } finally {
-            readLock.unlock();
+            if (acquired) {
+                readLock.unlock();
+            }
         }
+    }
+
+    private static long searchLockTimeoutMillis() {
+        long configured = Long.getLong(SEARCH_LOCK_TIMEOUT_SYS_PROP, DEFAULT_SEARCH_LOCK_TIMEOUT_MILLIS);
+        return configured > 0 ? configured : DEFAULT_SEARCH_LOCK_TIMEOUT_MILLIS;
+    }
+
+    private static boolean allowTestJsonFallback(String uri) {
+        if (Boolean.getBoolean("es.lance.allow_file_json_fallback_for_tests") == false) {
+            return false;
+        }
+        if (uri == null || uri.endsWith(".json") == false) {
+            return false;
+        }
+        return uri.startsWith("file://") || uri.startsWith("/") || uri.matches("^[A-Za-z]:\\\\.*");
     }
 
     private static void withRefreshLock(Runnable action) {

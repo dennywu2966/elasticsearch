@@ -16,6 +16,8 @@ import org.elasticsearch.test.ESTestCase;
 
 import java.util.Map;
 
+import static org.hamcrest.Matchers.containsString;
+
 /**
  * Comprehensive unit tests for {@link EsToLanceFilterConverter}.
  * <p>
@@ -374,5 +376,29 @@ public class EsToLanceFilterConverterTests extends ESTestCase {
         String sql = converter.convert(query, mapping);
 
         assertEquals("website_url = 'https://example.com/path?query=value'", sql);
+    }
+
+    public void testRejectsInvalidMappedColumnName() {
+        TermQuery query = new TermQuery(new Term("category", "books"));
+        Map<String, String> mapping = Map.of("category", "product_category; DROP TABLE users");
+
+        LanceFilterConversionException e = expectThrows(LanceFilterConversionException.class, () -> converter.convert(query, mapping));
+        assertThat(e.getMessage(), containsString("Invalid Lance column name"));
+    }
+
+    public void testRejectsNaNAsNumericLiteral() {
+        TermQuery query = new TermQuery(new Term("value", "NaN"));
+        Map<String, String> mapping = Map.of("value", "numeric_value");
+
+        LanceFilterConversionException e = expectThrows(LanceFilterConversionException.class, () -> converter.convert(query, mapping));
+        assertThat(e.getMessage(), containsString("Non-finite numeric values are not supported"));
+    }
+
+    public void testRejectsInfinityAsNumericLiteral() {
+        TermQuery query = new TermQuery(new Term("value", "Infinity"));
+        Map<String, String> mapping = Map.of("value", "numeric_value");
+
+        LanceFilterConversionException e = expectThrows(LanceFilterConversionException.class, () -> converter.convert(query, mapping));
+        assertThat(e.getMessage(), containsString("Non-finite numeric values are not supported"));
     }
 }

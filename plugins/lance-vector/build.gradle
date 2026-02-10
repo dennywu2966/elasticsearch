@@ -12,16 +12,26 @@ esplugin {
 
 dependencies {
   implementation project(':server')
-  implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.2'
+  implementation "com.fasterxml.jackson.core:jackson-annotations:${versions.jackson}"
+  implementation "com.fasterxml.jackson.core:jackson-core:${versions.jackson}"
+  implementation "com.fasterxml.jackson.core:jackson-databind:${versions.jackson}"
 
   // Lance Java SDK (JNI bindings to Rust core)
   // Provides IVF-PQ indexed vector search with SIMD acceleration
   // Exclude Guava as it's not allowed on compile classpath in Elasticsearch
-  // Exclude arrow-memory-netty to use arrow-memory-unsafe instead (avoids ES security conflicts)
+  // Exclude Arrow/Jackson transitives to keep plugin dependencies explicit and internally consistent.
+  // Arrow remains pinned to 15.x here for lance-core compatibility on this branch.
   implementation('com.lancedb:lance-core:1.0.0-beta.2') {
     exclude group: 'com.google.guava', module: 'guava'
     exclude group: 'com.google.guava', module: 'failureaccess'
-    exclude group: 'org.apache.arrow', module: 'arrow-memory-netty'
+    exclude group: 'org.apache.arrow'
+    exclude group: 'com.fasterxml.jackson.core', module: 'jackson-annotations'
+    exclude group: 'com.fasterxml.jackson.core', module: 'jackson-core'
+    exclude group: 'com.fasterxml.jackson.core', module: 'jackson-databind'
+    exclude group: 'com.fasterxml.jackson.datatype', module: 'jackson-datatype-jsr310'
+    exclude group: 'com.fasterxml.jackson.jaxrs', module: 'jackson-jaxrs-base'
+    exclude group: 'com.fasterxml.jackson.jaxrs', module: 'jackson-jaxrs-json-provider'
+    exclude group: 'com.fasterxml.jackson.module', module: 'jackson-module-jaxb-annotations'
   }
 
   // Guava is required by lance-java at runtime
@@ -33,6 +43,7 @@ dependencies {
   // Netty's platform detection which conflicts with ES security/entitlements
   implementation 'org.apache.arrow:arrow-vector:15.0.0'
   implementation 'org.apache.arrow:arrow-memory-unsafe:15.0.0'
+  implementation 'org.apache.arrow:arrow-dataset:15.0.0'
   implementation 'org.apache.arrow:arrow-c-data:15.0.0'
   implementation 'org.apache.arrow:arrow-format:15.0.0'
 
@@ -53,6 +64,8 @@ dependencies {
 
 tasks.named('test').configure {
   systemProperty 'java.awt.headless', 'true'
+  // Keep legacy JSON fixture compatibility for test suites only.
+  systemProperty 'es.lance.allow_file_json_fallback_for_tests', 'true'
   // Required for Apache Arrow memory management (Java 21+)
   jvmArgs '--add-opens=java.base/java.nio=ALL-UNNAMED'
 }

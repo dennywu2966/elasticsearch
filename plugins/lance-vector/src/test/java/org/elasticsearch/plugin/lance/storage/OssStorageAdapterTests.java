@@ -253,7 +253,7 @@ public class OssStorageAdapterTests extends ESTestCase {
 
     // ========== listObjects tests ==========
 
-    public void testListObjectsReturnsExpectedFiles() throws Exception {
+    public void testListObjectsThrowsUnsupportedOperation() throws Exception {
         Path tempFile = createTempFile();
         Files.writeString(tempFile, """
             {
@@ -265,12 +265,10 @@ public class OssStorageAdapterTests extends ESTestCase {
             """);
 
         OssStorageAdapter adapter = new OssStorageAdapter(tempFile.toString());
-        String[] files = adapter.listObjects("oss://bucket/path", "prefix");
-
-        // Phase 1 implementation returns hardcoded list
-        assertThat(files.length, equalTo(3));
-        assertThat(files[0], equalTo("_latest.manifest"));
-        assertThat(files[1], equalTo("data.lance"));
-        assertThat(files[2], equalTo("_versions/1.manifest"));
+        UnsupportedOperationException e = expectThrows(
+            UnsupportedOperationException.class,
+            () -> adapter.listObjects("oss://bucket/path", "prefix")
+        );
+        assertThat(e.getMessage(), containsString("not implemented in Phase 1"));
     }
 }

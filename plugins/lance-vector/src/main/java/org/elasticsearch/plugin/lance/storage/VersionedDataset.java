@@ -32,8 +32,9 @@ import java.util.concurrent.atomic.AtomicReference;
 public class VersionedDataset implements LanceDataset {
     private static final Logger logger = LogManager.getLogger(VersionedDataset.class);
 
-    private final AtomicReference<LanceDataset> delegate;
-    private volatile long version;
+    private record Snapshot(LanceDataset dataset, long version) {}
+
+    private final AtomicReference<Snapshot> snapshot;
 
     /**
      * Create a versioned dataset wrapper.
@@ -42,8 +43,7 @@ public class VersionedDataset implements LanceDataset {
      * @param version The initial version number
      */
     public VersionedDataset(LanceDataset initial, long version) {
-        this.delegate = new AtomicReference<>(initial);
-        this.version = version;
+        this.snapshot = new AtomicReference<>(new Snapshot(initial, version));
     }
 
     /**
@@ -57,56 +57,54 @@ public class VersionedDataset implements LanceDataset {
      * @return The old dataset (caller should close it after grace period)
      */
     public LanceDataset swap(LanceDataset newDataset, long newVersion) {
-        LanceDataset old = delegate.getAndSet(newDataset);
-        long oldVersion = this.version;
-        this.version = newVersion;
-        logger.info("Swapped Lance dataset: version {} -> {}", oldVersion, newVersion);
-        return old;
+        Snapshot old = snapshot.getAndSet(new Snapshot(newDataset, newVersion));
+        logger.info("Swapped Lance dataset: version {} -> {}", old.version(), newVersion);
+        return old.dataset();
     }
 
     /** Get the current version number. */
     public long version() {
-        return version;
+        return snapshot.get().version();
     }
 
     @Override
     public List<Candidate> search(float[] queryVector, int k, String columnName) {
-        return delegate.get().search(queryVector, k, columnName);
+        return snapshot.get().dataset().search(queryVector, k, columnName);
     }
 
     @Override
     public List<Candidate> search(float[] queryVector, int k, String columnName, VarCharVector idFilter) throws IOException {
-        return delegate.get().search(queryVector, k, columnName, idFilter);
+        return snapshot.get().dataset().search(queryVector, k, columnName, idFilter);
     }
 
     @Override
     public List<Candidate> search(float[] queryVector, int k, String columnName, int nprobes) throws IOException {
-        return delegate.get().search(queryVector, k, columnName, nprobes);
+        return snapshot.get().dataset().search(queryVector, k, columnName, nprobes);
     }
 
     @Override
     public List<Candidate> search(float[] queryVector, int k, String columnName, String sqlFilter) throws IOException {
-        return delegate.get().search(queryVector, k, columnName, sqlFilter);
+        return snapshot.get().dataset().search(queryVector, k, columnName, sqlFilter);
     }
 
     @Override
     public List<Candidate> search(float[] queryVector, int k, String columnName, int nprobes, String sqlFilter, String similarity)
         throws IOException {
-        return delegate.get().search(queryVector, k, columnName, nprobes, sqlFilter, similarity);
+        return snapshot.get().dataset().search(queryVector, k, columnName, nprobes, sqlFilter, similarity);
     }
 
     @Override
     public String uri() {
-        return delegate.get().uri();
+        return snapshot.get().dataset().uri();
     }
 
     @Override
     public int dims() {
-        return delegate.get().dims();
+        return snapshot.get().dataset().dims();
     }
 
     @Override
     public void close() throws IOException {
-        delegate.get().close();
+        snapshot.get().dataset().close();
     }
 }

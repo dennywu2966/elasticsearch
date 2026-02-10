@@ -9,11 +9,20 @@
 
 package org.elasticsearch.plugin.lance.storage;
 
+import com.lancedb.lance.Dataset;
+
+import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.vector.VarCharVector;
+import org.apache.arrow.vector.VectorSchemaRoot;
 import org.elasticsearch.test.ESTestCase;
 
 import java.io.IOException;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
@@ -92,6 +101,37 @@ public class RealLanceDatasetTests extends ESTestCase {
         // Should complete without error
     }
 
+    public void testExtractCandidatesFailsWhenDistanceColumnMissing() throws Exception {
+        RealLanceDataset dataset = createTestDataset();
+
+        try (RootAllocator allocator = new RootAllocator(1024 * 1024); VarCharVector idVector = new VarCharVector("_id", allocator)) {
+            idVector.allocateNew(1);
+            idVector.set(0, "doc-1".getBytes(StandardCharsets.UTF_8));
+            idVector.setValueCount(1);
+
+            try (VectorSchemaRoot root = VectorSchemaRoot.of(idVector)) {
+                IllegalStateException e = expectThrows(IllegalStateException.class, () -> invokeExtractCandidates(dataset, root, "cosine"));
+                assertThat(e.getMessage(), containsString("Distance column not found"));
+            }
+        }
+    }
+
+    public void testPreFilterSearchThrowsUnsupportedOperation() throws Exception {
+        RealLanceDataset dataset = createTestDataset();
+
+        try (RootAllocator allocator = new RootAllocator(1024 * 1024); VarCharVector idFilter = new VarCharVector("_id_filter", allocator)) {
+            idFilter.allocateNew(1);
+            idFilter.set(0, "doc-1".getBytes(StandardCharsets.UTF_8));
+            idFilter.setValueCount(1);
+
+            UnsupportedOperationException e = expectThrows(
+                UnsupportedOperationException.class,
+                () -> dataset.search(new float[] { 0.1f, 0.2f, 0.3f }, 10, "vector", idFilter)
+            );
+            assertThat(e.getMessage(), containsString("not implemented"));
+        }
+    }
+
     // ========== Tests that require native libraries ==========
 
     public void testOpenNonExistentDatasetThrowsIOException() throws Exception {
@@ -141,5 +181,33 @@ public class RealLanceDatasetTests extends ESTestCase {
 
         // The error should come from the Lance SDK trying to read invalid data
         assertNotNull(ex);
+    }
+
+    private static RealLanceDataset createTestDataset() throws Exception {
+        Constructor<RealLanceDataset> ctor = RealLanceDataset.class.getDeclaredConstructor(
+            Dataset.class,
+            String.class,
+            int.class,
+            long.class,
+            boolean.class,
+            String.class,
+            String.class,
+            int.class
+        );
+        ctor.setAccessible(true);
+        return ctor.newInstance(null, "file:///tmp/test.lance", 3, 0L, false, "_id", "vector", 20);
+    }
+
+    private static void invokeExtractCandidates(RealLanceDataset dataset, VectorSchemaRoot batch, String similarity) throws Exception {
+        Method method = RealLanceDataset.class.getDeclaredMethod("extractCandidates", VectorSchemaRoot.class, String.class, java.util.List.class);
+        method.setAccessible(true);
+        try {
+            method.invoke(dataset, batch, similarity, new ArrayList<LanceDataset.Candidate>());
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            if (e.getCause() instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw e;
+        }
     }
 }

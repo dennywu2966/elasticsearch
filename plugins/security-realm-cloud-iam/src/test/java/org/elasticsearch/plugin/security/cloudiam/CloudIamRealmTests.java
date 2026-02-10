@@ -161,6 +161,24 @@ public class CloudIamRealmTests extends ESTestCase {
         }
     }
 
+    public void testRejectsDifferentSignatureAfterSuccessfulAuthentication() {
+        try (TestThreadPool threadPool = new TestThreadPool(getTestName())) {
+            Settings settings = baseSettings();
+            CloudIamRealm realm = createRealm(settings, threadPool);
+            Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+
+            CloudIamToken valid = CloudIamToken.fromHeaders(buildSignedHeader("AKID", "mock", "nonce-1", now, null), 8192);
+            PlainActionFuture<AuthenticationResult<User>> success = new PlainActionFuture<>();
+            realm.authenticate(valid, success);
+            assertThat(success.actionGet().isAuthenticated(), is(true));
+
+            CloudIamToken invalid = CloudIamToken.fromHeaders(buildSignedHeader("AKID", "bad", "nonce-2", now, null), 8192);
+            PlainActionFuture<AuthenticationResult<User>> failure = new PlainActionFuture<>();
+            realm.authenticate(invalid, failure);
+            assertThat(failure.actionGet().getStatus(), is(AuthenticationResult.Status.TERMINATE));
+        }
+    }
+
     public void testRejectsAssumedRoleWhenDisabled() {
         try (TestThreadPool threadPool = new TestThreadPool(getTestName())) {
             Settings settings = baseSettings();

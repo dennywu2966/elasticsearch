@@ -68,6 +68,7 @@ import java.util.stream.Collectors;
 public class LanceKnnQuery extends Query implements QueryProfilerProvider {
     private static final Logger logger = LogManager.getLogger(LanceKnnQuery.class);
     private static final int DEFAULT_NPROBES = 20;
+    private static final boolean TRACE_DEBUG_ENABLED = Boolean.parseBoolean(System.getProperty("lance.trace.debug", "false"));
 
     /**
      * Strategy for how filters are applied during kNN search.
@@ -293,6 +294,23 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
             String resolvedUri = storageConfig.resolveUri(indexName, resolvedShardId);
             LanceDatasetConfig config = buildDatasetConfig();
             String sqlFilter = tryConvertFilterToSql(filterQuery);
+            if (capturedContext != null) {
+                capturedContext.putDebug("lance_trace_debug_enabled", TRACE_DEBUG_ENABLED);
+                capturedContext.putDebug("lance_resolved_uri", resolvedUri);
+                capturedContext.putDebug("lance_index_name", indexName);
+                capturedContext.putDebug("lance_field_name", fieldName);
+                capturedContext.putDebug("lance_shard_id", resolvedShardId);
+                capturedContext.putDebug("lance_num_shards", storageConfig.getNumShards());
+                capturedContext.putDebug("lance_k", k);
+                capturedContext.putDebug("lance_num_candidates", numCandidates);
+                capturedContext.putDebug("lance_nprobes", nprobes);
+                capturedContext.putDebug("lance_similarity", similarity);
+                capturedContext.putDebug("lance_filter_present", filterQuery != null);
+                capturedContext.putDebug("lance_shard_aware", storageConfig.isShardAware());
+                if (TRACE_DEBUG_ENABLED) {
+                    capturedContext.putDebug("lance_sql_filter", sqlFilter != null ? sqlFilter : "");
+                }
+            }
             long searchStart = System.nanoTime();
             List<LanceDataset.Candidate> candidates = LanceDatasetRegistry.withSearchLock(() -> {
                 LanceDataset dataset;
@@ -313,6 +331,9 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
 
             if (storageConfig.isShardAware()) {
                 candidates = filterCandidatesByShard(candidates, storageConfig.getNumShards());
+            }
+            if (capturedContext != null) {
+                capturedContext.putDebug("lance_candidate_count", candidates.size());
             }
             sharedCandidates = candidates;
 
@@ -570,6 +591,10 @@ public class LanceKnnQuery extends Query implements QueryProfilerProvider {
         }
         if (timing != null) {
             timing.record(LanceTimingContext.LanceTimingStage.SCORE_AGGREGATION, (System.nanoTime() - joinStart) / 1_000_000);
+            timing.putDebug("lance_result_count", docScores.size());
+            if (TRACE_DEBUG_ENABLED) {
+                timing.putDebug("lance_filter_strategy", filter != null ? "post_filter" : "none");
+            }
         }
 
         logger.debug("Lance kNN search complete: candidates={}, results={}, filter={}", results.size(), docScores.size(), filter != null);

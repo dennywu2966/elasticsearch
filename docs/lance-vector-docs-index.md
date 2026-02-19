@@ -17,6 +17,12 @@ Lance Vector Plugin 是 Elasticsearch 9.2.4 的向量字段类型插件，支持
 |------|------|---------|
 | **[架构设计](./lance-vector-架构设计.md)** | 系统架构、核心组件设计、数据流设计 | 架构师、开发工程师 |
 | **[用户指南](./lance-vector-用户指南.md)** | 安装配置、使用方法、API 参考、故障排除 | 系统管理员、开发工程师 |
+| **[用户指南（PR6 最新版）](./lance-vector-用户指南-PR6.md)** | 基于 PR #6 最新实现的操作指南（pushdown / sharding / nprobes / refresh） | 业务开发、平台运维 |
+| **[机制讲解与技术分享（PR6）](./lance-vector-机制讲解与技术分享-PR6.md)** | 面向技术分享的机制解析与演示提纲 | 架构师、核心开发、技术布道 |
+| **[跨项目技术分享（Lance + Cloud IAM + IDaaS）](./tech-share-lance-cloud-iam-ldap-PR6.md)** | 联读 `es-9.2.4-plugins-rt-scale` 与 `../ldap-demo` 的中文分享讲稿/幻灯片 | 架构师、平台工程、身份与安全团队 |
+| **[跨项目技术分享（PPTX，含讲者备注）](./tech-share-lance-cloud-iam-ldap-PR6.pptx)** | 使用 `python-pptx` 生成的正式投屏版（31 页，含 notes） | 技术分享主讲人 |
+| **[跨项目技术分享（PPTX，30 分钟节奏优化版）](./tech-share-lance-cloud-iam-ldap-PR6-30min.pptx)** | 每页 1 句主讲词 + 建议用时 + 累计时间（总时长 30:00） | 技术分享主讲人 |
+| **[跨项目技术分享（PPTX，Pandoc 紧凑版）](./tech-share-lance-cloud-iam-ldap-PR6-pandoc.pptx)** | 使用 `pandoc` 生成的紧凑版（19 页） | 快速评审/短会分享 |
 
 ### 项目文档
 

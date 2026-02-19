@@ -1,226 +1,176 @@
-# P0 Findings: Lance Plugin Production Hardening
+# Findings & Decisions
+<!-- 
+  WHAT: Your knowledge base for the task. Stores everything you discover and decide.
+  WHY: Context windows are limited. This file is your "external memory" - persistent and unlimited.
+  WHEN: Update after ANY discovery, especially after 2 view/browser/search operations (2-Action Rule).
+-->
 
-**Purpose**: Research findings, discoveries, and technical notes during P0 implementation
+## Requirements
+<!-- 
+  WHAT: What the user asked for, broken down into specific requirements.
+  WHY: Keeps requirements visible so you don't forget what you're building.
+  WHEN: Fill this in during Phase 1 (Requirements & Discovery).
+  EXAMPLE:
+    - Command-line interface
+    - Add tasks
+    - List all tasks
+    - Delete tasks
+    - Python implementation
+-->
+<!-- Captured from user request -->
+- 深读仓库，提炼技术分享事实材料，覆盖 5 个主题（Lance 多分片、NRT 刷新、prefilter/filter pushdown、数据流、Cloud IAM）
+- 输出中文要点，至少 20 条，每条给出文件路径与行号证据
+- 标注“已证实事实”与“推断/建议”
+- 给出 2 张可上 slides 的 ASCII 架构图草稿
 
----
+## Research Findings
+<!-- 
+  WHAT: Key discoveries from web searches, documentation reading, or exploration.
+  WHY: Multimodal content (images, browser results) doesn't persist. Write it down immediately.
+  WHEN: After EVERY 2 view/browser/search operations, update this section (2-Action Rule).
+  EXAMPLE:
+    - Python's argparse module supports subcommands for clean CLI design
+    - JSON module handles file persistence easily
+    - Standard pattern: python script.py <command> [args]
+-->
+<!-- Key discoveries during exploration -->
+- docs/lance-vector-docs-index.md 提示有“用户指南（PR6 最新版）”并覆盖 pushdown/sharding/refresh 等主题，可作为核心证据入口
+- docs/lance-vector-docs-index.md 列出 P2: NRT 刷新并标出设置项名称（lance.refresh.enabled、lance.refresh.interval）
+- docs/lance-vector-用户指南-PR6.md 与 docs/lance-vector-机制讲解与技术分享-PR6.md 包含 field_mapping、pushdown 行为说明与技术分享线索
+- plugins/lance-vector/src/main/java/org/elasticsearch/plugin/lance/query/EsToLanceFilterConverter.java 与 LanceKnnQuery.java 明确过滤下推逻辑与失败回退
+- plugins/lance-vector/src/main/java/org/elasticsearch/plugin/lance/storage/RealLanceDataset.java 提到 SDK pre-filter 尚未实现（有 TODO）
+- plugins/lance-vector/src/test/java/org/elasticsearch/plugin/lance/query/LanceFilterPushdownIntegrationTests.java 与 EsToLanceFilterConverterTests.java 提供过滤下推测试覆盖
+- docs/lance-vector-用户指南-PR6.md/机制讲解-PR6.md 详述 shard-aware 配置字段（uri_prefix/shard_path/dataset_name/sharding_strategy）
+- plugins/lance-vector/src/main/java/org/elasticsearch/plugin/lance/mapper/LanceStorageConfig.java 与 LanceVectorFieldMapper.java 含分片策略解析与校验逻辑
+- Lance 刷新相关代码集中在 plugins/lance-vector/src/main/java/.../LanceRefreshService.java、RestLanceRefreshAction.java、LanceVectorPlugin.java
+- docs/cloud-iam-e2e.sh 提供 Cloud IAM 验证脚本，包含 RAM AK/SK 与 X-ES-IAM-Signed 头部的调用示例
+- plugins/lance-vector/docs/分片感知数据集映射指南.md 说明单数据集与分片感知两种模式，以及 shard-aware 路由一致性要求
+- Cloud IAM 代码位于 plugins/security-realm-cloud-iam，包含 CloudIamRealmPlugin、OAuthTokenValidator、CloudIamRealmSettings 等
+- docs/cloud-iam-e2e.sh 提供 realm 配置与 X-ES-IAM-Signed 头鉴权的 E2E 测试脚本
+- LanceVectorFieldMapper 明确 uri_prefix/shard_path/dataset_name 的解析优先级与 field_mapping 解析校验
+- LanceStorageConfig 文档化 ES_ROUTING 使用 Murmur3 哈希的分片候选过滤策略与 NONE 模式
+- EsToLanceFilterConverter 明确 v1 仅支持 TermQuery，失败触发回退，且做 SQL 转义
+- LanceKnnQuery.tryConvertFilterToSql() 基于 field_mapping 尝试 pushdown，失败回退到 ES 后过滤
+- LanceRefreshService 使用 ScheduledExecutorService 周期刷新，refreshAll 清空缓存并重新调度
+- LanceDatasetRegistry 使用读写锁保护 refresh 与查询并发、Cache+LRU+TTL，避免重复加载
+- RestLanceRefreshAction 暴露 POST /_lance/refresh 并调用 refreshService.refreshAll()
+- LanceVectorPlugin 定义 lance.refresh.enabled / lance.refresh.interval，createComponents 中按开关启动刷新服务
+- LanceKnnQueryTests 包含“刷新期间查询不被关闭”的并发测试场景
+- LanceRefreshServiceTests 覆盖启动/停止、refreshAll 清缓存、刷新间隔设置
+- ShardAwareIntegrationTests 覆盖 shard-aware URI 解析、index/shard 占位符与 legacy 兼容行为
+- LanceStorageConfigTests 验证默认分片策略（legacy=NONE，shard-aware=ES_ROUTING）
+- LanceStorageConfig.resolveUri 处理 uri_prefix/shard_path/dataset_name 解析与错误校验（.lance 结尾冲突）
+- LanceFilterPushdownIntegrationTests 覆盖 TermQuery 转 SQL、字段未映射回退、SQL 注入转义等
+- EsToLanceFilterConverterTests 提供转换器单元测试矩阵（类型处理、转义、映射缺失）
+- docs/lance-vector-架构设计.md 与 分片感知数据集映射指南.md 指出 Phase 1 只读，不支持写入
+- LanceVectorFieldMapper 对 read_only 进行校验并强制 Phase 1 只读
+- highlevel-design.md 多处提到 data lake / S3 Lance 作为源数据，并描述 External Mount/Phase 1 的定位
+- CloudIamRealmPlugin 注册默认鉴权头 X-ES-IAM-Auth / X-ES-IAM-Signed
+- CloudIamRealmSettings 提供 auth.mode、allow_assumed_role、role_mapping、IAM endpoint/region、缓存与重放保护配置
+- CloudIamToken 支持 STS 签名头与 OAuth Bearer，OAuth 优先
+- CloudIamRealm 从 signed header 或 Authorization 创建 token，按 OAuth/STS 路由不同 client，并支持 nonce 重放保护与 role mapping
+- OAuthTokenValidator 调用 Aliyun OAuth userinfo，并构造 RAM user/role ARN
+- AliyunStsClient 校验 STS GetCallerIdentity 请求参数、构造请求并解析 ARN/AccountId/UserId
+- tools/aliyun_sts_sign.py 生成 X-ES-IAM-Signed 头（RAM AK/SK + STS 参数签名）
+- Cloud IAM README 说明支持 RAM 用户/STS 角色、提供签名头认证示例与角色映射
+- Cloud IAM Validation Guide 说明 ARN 结构与 principal type（user/role/assumed_role）映射策略
+- LIMITATION.md 明确两条认证路径：STS Signature 与 OAuth Bearer（Authorization 头），并列出差异
+- LIMITATION.md 说明 assumed role 仅 STS 路径支持，OAuth 路径不支持 assumed-role 类型
+- CloudIamSecurityExtension 根据 auth.mode 选择 STS/OAuth 或 mock 客户端
+- docs/lance-vector-架构设计.md 包含架构图与分层说明，并描述 filter 评估、刷新机制、数据集加载流程
+- docs/lance-vector-机制讲解与技术分享-PR6.md 明确 pushdown/分片策略/刷新入口与回退策略、并发安全说明
+- 分片感知映射指南与 SHARD-MAPPING.md 说明 legacy vs shard-aware、URI 解析模板、路由一致性不变量与只读限制
+- highlevel-design.md 描述 S3 data lake 为 source of truth，并给出 query/index/external mount 流程示意（设计文档）
+- docs/lance-vector-用户指南-PR6.md 记录 storage.*、field_mapping 格式、sharding_strategy 默认、read_only 与 NRT 设置/刷新流程
+- docs/lance-vector-用户指南-PR6.md 说明下推生效条件与失败回退、并发安全读写锁说明
+- PreFilterHeuristic 定义预/后过滤策略与 index.lance_vector.prefilter_heuristic 设置
+- LanceKnnQuery 通过提取过滤后的 _id 列表（stored fields）支持预过滤路径
+- LanceKnnQuery.filterCandidatesByShard 使用 Murmur3HashFunction + routingHashToShardId 按 ES 路由过滤候选
+- LanceDatasetRegistry.withSearchLock/withRefreshLock 使用读写锁保障刷新与查询并发安全
 
-## Current Codebase Analysis
+## Technical Decisions
+<!-- 
+  WHAT: Architecture and implementation choices you've made, with reasoning.
+  WHY: You'll forget why you chose a technology or approach. This table preserves that knowledge.
+  WHEN: Update whenever you make a significant technical choice.
+  EXAMPLE:
+    | Use JSON for storage | Simple, human-readable, built-in Python support |
+    | argparse with subcommands | Clean CLI: python todo.py add "task" |
+-->
+<!-- Decisions made with rationale -->
+| Decision | Rationale |
+|----------|-----------|
+|          |           |
 
-### Memory Management (Already Fixed per MEMORY_LEAK_FIXES.md)
+## Issues Encountered
+<!-- 
+  WHAT: Problems you ran into and how you solved them.
+  WHY: Similar to errors in task_plan.md, but focused on broader issues (not just code errors).
+  WHEN: Document when you encounter blockers or unexpected challenges.
+  EXAMPLE:
+    | Empty file causes JSONDecodeError | Added explicit empty file check before json.load() |
+-->
+<!-- Errors and how they were resolved -->
+| Issue | Resolution |
+|-------|------------|
+|       |            |
 
-1. **ThreadLocal Leak** - ✅ FIXED
-   - Removed instance-level `ThreadLocal<LanceTimingContext>` from `LanceKnnQuery`
-   - Added try-finally cleanup with `deactivate()` and `clear()`
-
-2. **Cache Eviction** - ✅ FIXED
-   - Replaced `ConcurrentHashMap` with Elasticsearch `Cache` API
-   - Max 100 datasets, 1-hour TTL
-   - **ISSUE FIXED**: Added `RemovalListener` that properly closes native resources on eviction
-
-3. **Plugin Lifecycle** - ✅ FIXED
-   - `LanceVectorPlugin.close()` clears registry and closes Arrow allocator
-
-### Open Issues (From Code Review)
-
-#### 1. Cache Eviction Callback May Not Close Resources
-
-**Location**: `LanceDatasetRegistry.java:50-53`
-
-```java
-CACHE = CacheBuilder.<String, LanceDataset>builder()
-    .setMaximumWeight(MAX_CACHED_DATASETS)
-    .setExpireAfterAccess(CACHE_TTL)
-    .build();
-```
-
-**Problem**: ES Cache API doesn't provide eviction callbacks like Guava's `RemovalListener`. When a dataset is evicted:
-- The entry is removed from cache
-- `LanceDataset.close()` may NOT be called
-- Native resources (JNI handles, Arrow memory) leak
-
-**Current Mitigation**:
-- `FALLBACK_CACHE.computeIfAbsent()` creates a secondary reference
-- `clear()` method properly closes datasets
-- But automatic eviction doesn't trigger cleanup
-
-**Recommended Fix**:
-- Implement a custom cache with eviction callback
-- Or use periodic cleanup task
-- Or use Guava cache directly (if compatible with ES)
-
-#### 2. Environment Variable Reflection (DOCUMENTED - Use Pre-Set Environment Variables)
-
-**Location**: `RealLanceDataset.java:212-232`
-
-**Status**: ✅ DOCUMENTED - Improved with warnings and fallback detection
-
-**Problems (Documented)**:
-1. **Thread safety**: `System.getenv()` map modification is not thread-safe
-2. **JVM version dependent**: Relies on internal implementation details
-3. **Native code visibility**: Java reflection changes may not be visible to native Lance code
-4. **Security manager**: May be blocked in secure environments
-
-**Why This Exists**: Native Lance Rust code reads from C `getenv()`, not Java's `System.getenv()`
-
-**Improvements Made**:
-1. Added comprehensive Javadoc warning about the risks
-2. Added check for pre-set environment variables (proper approach)
-3. Logs warning when reflection is used as fallback
-4. Created `ENVIRONMENT_VARIABLE_SETUP.md` with detailed documentation
-
-**Recommended Approach** (Production):
-Set environment variables in parent shell before ES starts:
-```bash
-export OSS_ACCESS_KEY_ID=$(grep '"access_key_id"' ~/.oss/credentials.json | cut -d'"' -f4)
-export OSS_ACCESS_KEY_SECRET=$(grep '"access_key_secret"' ~/.oss/credentials.json | cut -d'"' -f4)
-export OSS_ENDPOINT="oss-ap-southeast-1.aliyuncs.com"
-./bin/elasticsearch
-```
-
-**Alternatives**:
-1. Set environment variables in parent shell before ES starts (RECOMMENDED - documented in `ENVIRONMENT_VARIABLE_SETUP.md`)
-2. Use lance-java's explicit configuration API (if available - not in current version)
-3. Write a small native shim to set C environment variables
-
-#### 3. Dual-Cache Race Conditions (FIXED - Simplified to Single Cache)
-
-**Location**: `LanceDatasetRegistry.java`
-
-**Status**: ✅ FIXED - Removed dual-cache pattern
-
-**Original Problem**:
-- Registry used both ES Cache API (CACHE) and ConcurrentHashMap (FALLBACK_CACHE)
-- During eviction: CACHE evicts → removal listener closes dataset → removes from FALLBACK_CACHE
-- Race condition: Thread A loads → puts in FALLBACK_CACHE → Thread B evicts → Thread A's CACHE.put() puts closed dataset
-- Result: Closed datasets could be returned to callers
-
-**Fix Applied**:
-1. Removed FALLBACK_CACHE entirely
-2. Use only ES Cache API as single source of truth
-3. Implemented per-URI locking: `synchronized (uri.intern())`
-4. Added LOADING_URIS tracker to prevent duplicate loads
-
-**Code Changes**:
-```java
-// Before: Dual cache with race conditions
-return FALLBACK_CACHE.computeIfAbsent(uri, u -> {
-    LanceDataset dataset = loader.get();
-    cache.put(uri, dataset);  // Race: dataset might be closed by eviction here
-    return dataset;
-});
-
-// After: Single cache with per-URI locking
-synchronized (uri.intern()) {
-    cached = cache.get(uri);
-    if (cached != null) return cached;
-
-    if (LOADING_URIS.putIfAbsent(uri, uri) != null) {
-        // Another thread is loading, wait and retry
-        Thread.sleep(10);
-        return cache.get(uri);  // Will be loaded now
-    }
-
-    try {
-        LanceDataset dataset = loader.get();
-        cache.put(uri, dataset);
-        return dataset;
-    } finally {
-        LOADING_URIS.remove(uri);
-    }
-}
-```
-
-**Benefits**:
-- Eliminated race condition between dual caches
-- Removal listener now reliably cleans up resources
-- Simpler code is easier to maintain
-- Test timeouts reduced from 5+ minutes to <1 minute
-
-**Trade-offs**:
-- `uri.intern()` creates perm-gen strings (negligible for <100 URIs)
-- Short wait (10ms) when contending on same URI load
-- Global lock on interned string pool (minimal impact)
+## Resources
+<!-- 
+  WHAT: URLs, file paths, API references, documentation links you've found useful.
+  WHY: Easy reference for later. Don't lose important links in context.
+  WHEN: Add as you discover useful resources.
+  EXAMPLE:
+    - Python argparse docs: https://docs.python.org/3/library/argparse.html
+    - Project structure: src/main.py, src/utils.py
+-->
+<!-- URLs, file paths, API references -->
+-
 
 ---
 
-#### 4. Arrow Allocator Limits Not Well-Documented
+## Session 2026-02-10 Findings (Opus Review Actions)
 
-**Location**: `RealLanceDataset.java:63-83`
+### Requirements (Current Session)
+- Implement all action-plan items in `docs/opus_review_feedback_0209_actions.md` in severity order.
+- Use test-first workflow per behavior change; avoid non-meaningful tests.
+- Ensure no regressions across `plugins/lance-vector` and `plugins/security-realm-cloud-iam`.
 
-```java
-private static final long ALLOCATOR_LIMIT = 256 * 1024 * 1024; // 256MB
-private static volatile BufferAllocator allocator;
-```
+### Verified Baseline Facts
+- `plugins/lance-vector/build.gradle` pins `jackson-databind:2.17.2` and Arrow `15.0.0`.
+- `x-pack/plugin/esql/arrow/build.gradle` uses Arrow `18.3.0` and `${versions.jackson}`.
+- `LanceDatasetRegistry.getOrLoad()` currently falls back to `FakeLanceDataset` for non-Lance URIs.
+- `RealLanceDataset.extractCandidates()` logs missing distance column but continues with fallback `0f`.
+- `RealLanceDataset.search(..., VarCharVector idFilter)` warns and returns unfiltered search.
+- `LanceDatasetRegistry` currently uses `synchronized(uri.intern())` + `Thread.sleep(10)` spin-wait.
+- `LanceDatasetRegistry.invalidate()` closes directly and then invalidates cache (risking double close via removal listener).
+- Security realm/token currently include `System.err.println()` diagnostics.
+- `EsToLanceFilterConverter` does not validate mapped column identifiers and accepts non-finite numerics.
+- `OssStorageAdapter.loadCredentials()` opens InputStream without try-with-resources.
 
-**Questions**:
-- What happens when limit is reached? OOM? Graceful degradation?
-- Per-query child allocator limit (ALLOCATOR_LIMIT / 4 = 64MB) - is this sufficient?
-- Should limit be configurable?
+### Design Direction Chosen
+- Fail fast over silent degradation in production paths.
+- Keep behavior explicit when features are unsupported (throw with clear message).
+- Prefer minimal, targeted changes with broad regression coverage via existing plugin test suites.
 
----
-
-## Lance Rust SDK Concurrency Semantics (Research Needed)
-
-### Unknowns:
-1. Is `Dataset` thread-safe for concurrent reads?
-2. Is `LanceScanner` thread-safe?
-3. Can multiple queries share the same `Dataset` instance?
-
-### Documentation Needed:
-- Lance Java SDK concurrency guarantees
-- Native thread pool configuration
-- OSS connection pooling behavior
-
----
-
-## Cross-Shard Data Model (Open Question)
-
-**From future_plan_refined_zh.md P0.3**:
-> 一个 index 对应一个 Lance dataset，还是每 shard 一个 dataset 分区？
-
-### Implications:
-- **One dataset per index**: All shards query same candidate set → simpler but potential recall/ranking bias
-- **One dataset per shard**: Each shard has its own partition → requires URI template mechanism
-
-### Current State:
-- `storage.uri` is a single string in mapping
-- No shard-aware URI resolution
-- All shards share the same dataset
+## Visual/Browser Findings
+<!-- 
+  WHAT: Information you learned from viewing images, PDFs, or browser results.
+  WHY: CRITICAL - Visual/multimodal content doesn't persist in context. Must be captured as text.
+  WHEN: IMMEDIATELY after viewing images or browser results. Don't wait!
+  EXAMPLE:
+    - Screenshot shows login form has email and password fields
+    - Browser shows API returns JSON with "status" and "data" keys
+-->
+<!-- CRITICAL: Update after every 2 view/browser operations -->
+<!-- Multimodal content must be captured as text immediately -->
+-
 
 ---
-
-## Observability Gaps
-
-### Missing Metrics:
-1. Query latency percentiles (p50, p95, p99)
-2. Dataset cache hit/miss rates
-3. Native memory usage (Arrow allocator)
-4. Open dataset count
-5. Active query count
-
-### Missing Health Checks:
-1. Dataset accessibility (can we open and query?)
-2. OSS credential validity
-3. Schema validation
-
----
-
-## Testing Infrastructure
-
-### Existing:
-- `FakeLanceDataset` for JSON test fixtures
-- YAML REST tests (if any)
-
-### Needed for P0:
-1. Concurrency stress test
-2. Memory leak detection test
-3. 7-day soak test framework
-
----
-
-## References
-
-- `future_plan_refined_zh.md` - P0 requirements
-- `MEMORY_LEAK_FIXES.md` - Previous fixes
-- `COMPLETE_VALIDATION_REPORT.md` - Validation results
-- `CLAUDE.md` - Project documentation
+<!-- 
+  REMINDER: The 2-Action Rule
+  After every 2 view/browser/search operations, you MUST update this file.
+  This prevents visual information from being lost when context resets.
+-->
+*Update this file after every 2 view/browser/search operations*
+*This prevents visual information from being lost*

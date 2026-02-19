@@ -79,6 +79,7 @@ public final class LanceTimingContext {
 
     private static class TimingData {
         final Map<LanceTimingStage, List<Long>> timings = new EnumMap<>(LanceTimingStage.class);
+        final Map<String, Object> debug = new java.util.LinkedHashMap<>();
         private boolean active = false;
 
         void record(LanceTimingStage stage, long durationMs) {
@@ -91,8 +92,15 @@ public final class LanceTimingContext {
             return Collections.unmodifiableMap(timings);
         }
 
+        void putDebug(String key, Object value) {
+            if (active && key != null && key.isEmpty() == false && value != null) {
+                debug.put(key, value);
+            }
+        }
+
         void clear() {
             timings.clear();
+            debug.clear();
         }
     }
 
@@ -165,6 +173,15 @@ public final class LanceTimingContext {
     }
 
     /**
+     * Store additional debug fields for profile output.
+     * These fields are intended for troubleshooting and should be lightweight
+     * unless an explicit debug mode is enabled by the caller.
+     */
+    public void putDebug(String key, Object value) {
+        data.putDebug(key, value);
+    }
+
+    /**
      * Convert timing data to a map suitable for debugging output.
      * <p>
      * This method aggregates multiple measurements of the same stage
@@ -199,6 +216,9 @@ public final class LanceTimingContext {
         result.put("lance_total_onetime_ms", totalOneTime);
         result.put("lance_total_persearch_ms", totalPerSearch);
         result.put("lance_total_ms", totalOneTime + totalPerSearch);
+        if (data.debug.isEmpty() == false) {
+            result.putAll(data.debug);
+        }
 
         return result;
     }

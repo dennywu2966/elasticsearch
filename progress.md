@@ -1,297 +1,179 @@
-## Session 2026-02-06
+# Progress Log
+<!-- 
+  WHAT: Your session log - a chronological record of what you did, when, and what happened.
+  WHY: Answers "What have I done?" in the 5-Question Reboot Test. Helps you resume after breaks.
+  WHEN: Update after completing each phase or encountering errors. More detailed than task_plan.md.
+-->
 
-### Phase: Planning & Analysis
+## Session: 2026-02-09
+<!-- 
+  WHAT: The date of this work session.
+  WHY: Helps track when work happened, useful for resuming after time gaps.
+  EXAMPLE: 2026-01-15
+-->
 
-#### Completed:
-1. ✅ Read and analyzed `future_plan_refined_zh.md` P0 requirements
-2. ✅ Reviewed existing validation reports and memory leak fixes
-3. ✅ Audited current codebase:
-   - `LanceDatasetRegistry.java` - Cache implementation
-   - `RealLanceDataset.java` - Native dataset wrapper
-   - `LanceVectorPlugin.java` - Plugin lifecycle
-4. ✅ Created planning files:
-   - `task_plan.md` - 6-phase implementation plan
-   - `findings.md` - Technical findings and open issues
-   - `progress.md` (this file) - Session log
+### Phase 1: Requirements & Discovery
+<!-- 
+  WHAT: Detailed log of actions taken during this phase.
+  WHY: Provides context for what was done, making it easier to resume or debug.
+  WHEN: Update as you work through the phase, or at least when you complete it.
+-->
+- **Status:** complete
+- **Started:** 2026-02-09 09:00
+<!-- 
+  STATUS: Same as task_plan.md (pending, in_progress, complete)
+  TIMESTAMP: When you started this phase (e.g., "2026-01-15 10:00")
+-->
+- Actions taken:
+  <!-- 
+    WHAT: List of specific actions you performed.
+    EXAMPLE:
+      - Created todo.py with basic structure
+      - Implemented add functionality
+      - Fixed FileNotFoundError
+  -->
+  - 深入检索 Lance 插件代码与文档，定位分片/刷新/pushdown/Cloud IAM 证据
+  - 汇总关键证据到 findings.md（含行号定位的候选文件）
+- Files created/modified:
+  <!-- 
+    WHAT: Which files you created or changed.
+    WHY: Quick reference for what was touched. Helps with debugging and review.
+    EXAMPLE:
+      - todo.py (created)
+      - todos.json (created by app)
+      - task_plan.md (updated)
+  -->
+  - task_plan.md (updated)
+  - findings.md (updated)
+  - progress.md (updated)
 
-#### Key Findings:
-1. **Cache Eviction Issue**: ES Cache API doesn't provide eviction callbacks - native resources may leak on automatic eviction
-2. **Environment Variable Reflection**: High-risk code using reflection to modify System.getenv() - thread-safety and JVM-version concerns
-3. **Concurrency Semantics**: Lance Rust SDK concurrent access behavior undocumented
-4. **Cross-Shard Model**: Data model ambiguity (one dataset per index vs per shard)
+### Phase 2: Planning & Structure
+<!-- 
+  WHAT: Same structure as Phase 1, for the next phase.
+  WHY: Keep a separate log entry for each phase to track progress clearly.
+-->
+- **Status:** complete
+- Actions taken:
+  - 明确输出结构：中文要点 + 事实/推断标注 + 行号证据 + ASCII 架构图
+- Files created/modified:
+  - task_plan.md (updated)
+  - findings.md (updated)
+
+## Test Results
+<!-- 
+  WHAT: Table of tests you ran, what you expected, what actually happened.
+  WHY: Documents verification of functionality. Helps catch regressions.
+  WHEN: Update as you test features, especially during Phase 4 (Testing & Verification).
+  EXAMPLE:
+    | Add task | python todo.py add "Buy milk" | Task added | Task added successfully | ✓ |
+    | List tasks | python todo.py list | Shows all tasks | Shows all tasks | ✓ |
+-->
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+|      |       |          |        |        |
+
+## Error Log
+<!-- 
+  WHAT: Detailed log of every error encountered, with timestamps and resolution attempts.
+  WHY: More detailed than task_plan.md's error table. Helps you learn from mistakes.
+  WHEN: Add immediately when an error occurs, even if you fix it quickly.
+  EXAMPLE:
+    | 2026-01-15 10:35 | FileNotFoundError | 1 | Added file existence check |
+    | 2026-01-15 10:37 | JSONDecodeError | 2 | Added empty file handling |
+-->
+<!-- Keep ALL errors - they help avoid repetition -->
+| Timestamp | Error | Attempt | Resolution |
+|-----------|-------|---------|------------|
+| 2026-02-09 09:02 | session-catchup.py not found at /home/denny/.claude/plugins/... | 1 | Used /home/denny/.agents/skills/planning-with-files/ instead |
+
+## 5-Question Reboot Check
+<!-- 
+  WHAT: Five questions that verify your context is solid. If you can answer these, you're on track.
+  WHY: This is the "reboot test" - if you can answer all 5, you can resume work effectively.
+  WHEN: Update periodically, especially when resuming after a break or context reset.
+  
+  THE 5 QUESTIONS:
+  1. Where am I? → Current phase in task_plan.md
+  2. Where am I going? → Remaining phases
+  3. What's the goal? → Goal statement in task_plan.md
+  4. What have I learned? → See findings.md
+  5. What have I done? → See progress.md (this file)
+-->
+<!-- If you can answer these, context is solid -->
+| Question | Answer |
+|----------|--------|
+| Where am I? | Phase 3 |
+| Where am I going? | Phase 3 → Phase 5 |
+| What's the goal? | 总结仓库内与 Lance 多分片、NRT 刷新、prefilter/filter pushdown、数据流架构、Cloud IAM 相关的可证实材料并输出可用于技术分享的中文要点与 ASCII 架构图草稿。 |
+| What have I learned? | See findings.md |
+| What have I done? | See above |
+
+---
+<!-- 
+  REMINDER: 
+  - Update after completing each phase or encountering errors
+  - Be detailed - this is your "what happened" log
+  - Include timestamps for errors to track when issues occurred
+-->
+*Update after completing each phase or encountering errors*
 
 ---
 
-### Phase: P0.1 Cache Eviction Callback Fix
+## Session: 2026-02-10
 
-#### ✅ COMPLETED: Cache Eviction Callback Implementation
+### Phase A-E: Review Action Execution (complete)
+- Actions taken:
+  - Loaded and applied process skills (`using-superpowers`, `receiving-code-review`, `brainstorming`, `writing-plans`, `test-driven-development`, `planning-with-files`, `verification-before-completion`).
+  - Re-verified review findings against current code and produced triage log:
+    - `docs/opus_review_feedback_0209_actions.md`
+  - Implemented all severity batches in order (`#2 #3 #4 #7 #8` → `#6 #9 #11 #12 #18 #19 #20` → `#14 #17 #21 #22` → `#1 #5 #10 #13 #15 #16`).
+  - Added/updated targeted tests for blocker, security, quality, and deferred hardening behaviors.
+  - Completed full plugin regression suites for `lance-vector` and `security-realm-cloud-iam`.
+- Files created/modified:
+  - `docs/opus_review_feedback_0209_actions.md` (created)
+  - `task_plan.md` (updated)
+  - `findings.md` (updated)
+  - `progress.md` (updated)
+  - `plugins/security-realm-cloud-iam/src/test/java/org/elasticsearch/plugin/security/cloudiam/OAuthTokenValidatorTests.java` (created)
 
-**Problem**: ES Cache API was being used without a removal listener. When datasets were evicted due to LRU policy or TTL expiration, native resources (JNI handles, Arrow memory) were not properly closed.
+## Test Results (2026-02-10)
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| OAuth validator RED | `:plugins:security-realm-cloud-iam:test --tests OAuthTokenValidatorTests` | New tests fail before fix | 2 tests failed (as intended RED) | ✓ |
+| OAuth validator GREEN | same command | All pass after fix | BUILD SUCCESSFUL | ✓ |
+| Immutability RED | `:plugins:lance-vector:test --tests LanceStorageConfigTests` + `:plugins:security-realm-cloud-iam:test --tests CloudIamTokenTests` | New tests fail before fix | both new tests failed (as intended RED) | ✓ |
+| Immutability GREEN | same command | All pass after fix | BUILD SUCCESSFUL | ✓ |
+| Deferred hardening targeted | `:plugins:lance-vector:test --tests RealLanceDatasetTests --tests OssStorageAdapterTests --tests LanceKnnQueryTests` | No regression | BUILD SUCCESSFUL | ✓ |
+| Full plugin regression | `:plugins:lance-vector:test :plugins:security-realm-cloud-iam:test` | No regression | BUILD SUCCESSFUL | ✓ |
 
-**Solution Implemented**:
-- Added `RemovalListener<String, LanceDataset>` to `LanceDatasetRegistry`
-- The listener is invoked on all evictions (SIZE, EXPIRED, REPLACED, INVALIDATED)
-- Calls `LanceDataset.close()` to release native resources
-- Logs eviction reasons for debugging
-- Removes from fallback cache to prevent dangling references
+## Error Log (2026-02-10)
+| Timestamp | Error | Attempt | Resolution |
+|-----------|-------|---------|------------|
+| 2026-02-10 | Gradle sandbox wildcard IP failure | 1 | Re-ran with escalated execution. |
+| 2026-02-10 | Timeout implementation used custom thread pool; entitlements blocked `manage_threads` | 1 | Replaced with entitlement-safe lock timeout in `LanceDatasetRegistry.withSearchLock`. |
+| 2026-02-10 | Full `build` task failed in `:plugins:lance-vector:checkstyleMain` on existing style violations outside this change scope | 1 | Documented as residual baseline issue; regression test suites remain green. |
 
-**Code Changes** (`LanceDatasetRegistry.java`):
-```java
-private static final RemovalListener<String, LanceDataset> DATASET_REMOVAL_LISTENER =
-    new RemovalListener<>() {
-        @Override
-        public void onRemoval(RemovalNotification<String, LanceDataset> notification) {
-            LanceDataset dataset = notification.getValue();
-            String uri = notification.getKey();
-            var reason = notification.getRemovalReason();
+## Session: 2026-02-10 (reg_validation_guide follow-up)
 
-            try {
-                if (dataset != null) {
-                    logger.debug("Closing evicted dataset: uri={}, reason={}", uri, reason);
-                    dataset.close();
-                    logger.info("Successfully closed evicted Lance dataset: uri={}, reason={}", uri, reason);
-                }
-            } catch (IOException e) {
-                logger.warn("Failed to close evicted dataset {}: {}", uri, e.getMessage());
-            } finally {
-                FALLBACK_CACHE.remove(uri);
-            }
-        }
-    };
-```
+### Validation + Fixes (complete)
+- Actions taken:
+  - Executed real regression command set for guide-aligned coverage:
+    - `:plugins:lance-vector:test`
+    - `:plugins:security-realm-cloud-iam:test`
+    - `:plugins:security-realm-cloud-iam:javaRestTest`
+  - Fixed javaRest dependency-verification blocker by trusting `elasticsearch-distribution-snapshot`.
+  - Fixed `CloudIamRealmIT` REST bootstrap auth by configuring `restAdminSettings()` with test-cluster credentials.
+  - Root-caused and fixed STS signature cache bypass in `CloudIamRealm` (`cacheKey` hardening), and added regression test.
 
-**Verification**: Plugin compiles successfully
+## Test Results (2026-02-10, follow-up)
+| Test | Input | Expected | Actual | Status |
+|------|-------|----------|--------|--------|
+| Cloud IAM unit+REST targeted | `:plugins:security-realm-cloud-iam:test --tests CloudIamRealmTests :plugins:security-realm-cloud-iam:javaRestTest --tests CloudIamRealmIT` | Both pass | BUILD SUCCESSFUL | ✓ |
+| Full guide-aligned plugin suites | `:plugins:lance-vector:test :plugins:security-realm-cloud-iam:test :plugins:security-realm-cloud-iam:javaRestTest` | No regressions | BUILD SUCCESSFUL | ✓ |
 
----
-
-### Phase: P0.1 Environment Variable Documentation
-
-#### ✅ COMPLETED: Environment Variable Documentation and Warnings
-
-**Problem**: The `setEnvIfChanged()` method uses reflection to modify Java's `System.getenv()` map, which is:
-1. Not thread-safe
-2. JVM-version dependent
-3. May not be visible to native Lance code
-4. May be blocked by security managers
-
-**Solution Implemented**:
-1. Created `plugins/lance-vector/ENVIRONMENT_VARIABLE_SETUP.md` with comprehensive documentation
-2. Added check for pre-set environment variables (proper approach)
-3. Logs warnings when reflection fallback is used
-4. Improved Javadoc with detailed warnings and migration path
-
-**Documentation Created** (`ENVIRONMENT_VARIABLE_SETUP.md`):
-- Problem explanation
-- Current implementation risks
-- Recommended approach (pre-set environment variables)
-- Operational procedures
-- Security considerations
-- Troubleshooting guide
-- Migration path
-
-**Code Changes** (`RealLanceDataset.java`):
-```java
-// Check if environment variables are already set (proper way)
-boolean envAlreadySet = System.getenv("OSS_ENDPOINT") != null
-    && System.getenv("OSS_ACCESS_KEY_ID") != null
-    && System.getenv("OSS_ACCESS_KEY_SECRET") != null;
-
-if (envAlreadySet) {
-    logger.info("OSS environment variables already set (recommended approach)...");
-} else {
-    logger.warn("OSS environment variables not set in process environment. " +
-        "Attempting fallback via reflection (may not work reliably)...");
-    setEnvIfChanged("OSS_ENDPOINT", config.ossEndpoint());
-    // ...
-}
-```
-
-**Verification**: Plugin compiles successfully
-
----
-
-### Phase: P0.2 Concurrency Stress Tests
-
-#### ✅ COMPLETED: Concurrency Stress Test Implementation + Cache Fix
-
-**Cache Fix Applied**:
-- Removed dual-cache pattern (FALLBACK_CACHE + CACHE)
-- Now uses only ES Cache API as single source of truth
-- Uses per-URI locking (synchronized on uri.intern()) for thread-safe loading
-- Added LOADING_URIS tracker to prevent duplicate loads
-
-**Files Modified**:
-- `LanceDatasetRegistry.java` - Simplified to single-cache pattern
-- `LanceDatasetConcurrencyStressTests.java` - 5 comprehensive stress tests
-
-**Test Results** (after cache fix):
-| Test | Status | Notes |
-|------|--------|-------|
-| testConcurrentQueriesToSameDataset | ✅ PASSING | 10 threads × 100 ops |
-| testConcurrentDatasetLoading | ✅ IMPROVED | Still flaky due to test timing |
-| testCacheEvictionUnderConcurrentAccess | ✅ PASSING | No longer timing out |
-| testDatasetCloseAndReloadUnderConcurrentLoad | ⚠️ Test bug | Index out of bounds in test code |
-| testMixedOperationsUnderConcurrentLoad | ⚠️ Test bug | Same index issue |
-
-**Cache Fix Benefits**:
-- Eliminated race condition between dual caches
-- Removal listener now reliably cleans up resources
-- Simpler code is easier to maintain
-- Test timeouts reduced from 5+ minutes to <1 minute
-
-**Remaining Test Issues** (test code, not production):
-- `randomInt(numUris)` can return numUris (inclusive), causing array index out of bounds
-- This is a test framework behavior issue, not a registry bug
-
----
-
-## Issues & Resolutions
-
-| Issue | Status | Resolution |
-|-------|--------|------------|
-| Cache eviction callback | ✅ FIXED | Implemented RemovalListener that closes datasets on eviction |
-| Env var reflection | ✅ DOCUMENTED | Created documentation with warnings and proper approach |
-| Concurrency semantics | ✅ TESTED | Created stress tests - identified race conditions |
-| Cache race conditions | ✅ FIXED | Simplified to single-cache pattern with per-URI locking |
-| Cross-shard data model | Open | Design decision needed |
-
----
-
-## Next Steps
-
-- P0.0: ✅ Build complete, baseline metrics script created
-- P0.2 Fix: ✅ ADDRESSED - Simplified dual-cache to single-cache pattern
-- P0.4: ✅ Soak test infrastructure created (ready for 7-day execution)
-- P0.5: ✅ Production baseline report generated
-- Comprehensive Tests: ✅ All 154 tests passing
-
----
-
-### Phase: P0.4 7-Day Soak Test (Infrastructure Ready)
-
-#### ✅ COMPLETED: Soak Test Infrastructure
-
-**Documents Created**:
-- `SOAK_TEST_GUIDE.md` - Complete soak test execution guide
-- `scripts/collect-baseline-metrics.sh` - Metrics collection script
-
-**Test Scenarios Documented**:
-1. **Sustained Query Load** - 10 qps for 7 days
-2. **Burst Load Pattern** - Alternating 100 qps / 1 qps
-3. **Cache Eviction Stress** - 200 datasets to trigger LRU eviction
-
-**Success Criteria Defined**:
-- Memory leak: <10 MB/day growth
-- FD leak: 0 FD/day growth
-- Thread leak: 0 threads/day growth
-- Query latency drift: <20% over 7 days
-- Error rate: <0.1%
-- Uptime: 100% (no crashes)
-
-**Monitoring Script Features**:
-- Heap usage tracking (via jstat)
-- FD count monitoring
-- Thread count monitoring
-- Alert thresholds with configurable limits
-- CSV output for analysis
-- Summary report generation
-
-**Status**: Ready for execution - requires 7 days continuous运行
-
----
-
-### Phase: P0.5 Production Baseline Report
-
-#### ✅ COMPLETED: Production Baseline Report
-
-**Document**: `P0.5_PRODUCTION_BASELINE_REPORT.md`
-
-**Contents**:
-1. **Executive Summary** - P0 completion status
-2. **Test Coverage** - 154 tests, all passing
-3. **Resource Leak Analysis** - Memory, FD, thread safety
-4. **Performance Baseline** - Latency and throughput targets
-5. **Known Issues** - S3 support, registry clear() atomicity
-6. **Operational Procedures** - Startup, monitoring, rollback
-7. **7-Day Soak Test Plan** - Configuration and success criteria
-8. **Rollback Procedures** - Failure handling
-9. **Appendix** - Test execution commands
-
-**Key Metrics Documented**:
-- Dataset Load: <1s (cached thereafter)
-- Vector Search: <100ms (k=10, 128 dims)
-- Cache Hit: <10ms
-- Concurrent Queries: 10+ threads verified
-
----
-
-### Phase: Comprehensive Test Coverage
-
-#### ✅ COMPLETED: All Tests Passing
-
-**Test Results**: 154 tests completed, 0 failed, 3 skipped
-
-**Test Suites**:
-- Unit Tests: 129 tests
-- Integration Tests: 20 tests
-- Concurrency Stress Tests: 5 tests
-
-**Tests Fixed**:
-1. **LanceDatasetConcurrencyStressTests** - Fixed index out of bounds bug
-2. **LanceVectorOssIntegrationTests** - Fixed S3 URI detection logic
-3. **LanceDatasetRegistry** - Fixed isLanceFormat() for OSS URIs
-
-**Code Quality**:
-- All code compiles without warnings
-- Spotless formatting applied
-- License headers correct
-- Javadoc complete
-
----
-
-## Final P0 Summary
-
-| Phase | Task | Status | Deliverables |
-|-------|------|--------|--------------|
-| P0.1 | Cache Eviction Callback | ✅ Complete | RemovalListener implementation |
-| P0.1 | Environment Variable Docs | ✅ Complete | ENVIRONMENT_VARIABLE_SETUP.md |
-| P0.2 | Concurrency Stress Tests | ✅ Complete | LanceDatasetConcurrencyStressTests.java |
-| P0.2 | Dual-Cache Race Fix | ✅ Complete | Simplified to single-cache pattern |
-| P0.0 | ES Build | ✅ Complete | Local distribution with Lance plugin |
-| P0.4 | Soak Test Infrastructure | ✅ Complete | SOAK_TEST_GUIDE.md, metrics script |
-| P0.5 | Baseline Report | ✅ Complete | P0.5_PRODUCTION_BASELINE_REPORT.md |
-| Tests | All Tests Passing | ✅ Complete | 154 tests, 0 failed |
-
-**Production Readiness**: Ready for 7-day soak test execution
-
----
-
-### Phase: P0.0 Build ES and Establish Baseline Metrics
-
-#### ✅ COMPLETED: ES Distribution Build
-
-**Build Command**: `./gradlew localDistro`
-**Build Time**: ~15 minutes
-**Distribution Location**: `/home/denny/projects/es-9.2.4-plugins-real-time/build/distribution/local/elasticsearch-9.2.4-SNAPSHOT/`
-
-**Plugin Installation**:
-- Lance plugin built: `plugins/lance-vector/build/distributions/lance-vector-9.2.4-SNAPSHOT.zip`
-- Extracted to: `elasticsearch-9.2.4-SNAPSHOT/plugins/`
-- Verified plugin descriptor present
-
-**Distribution Contents**:
-```
-elasticsearch-9.2.4-SNAPSHOT/
-├── bin/           # Startup scripts
-├── config/        # Configuration files
-├── jdk/           # Bundled JDK 21
-├── lib/           # Core libraries
-├── logs/          # Log directory
-├── modules/       # ES modules
-├── plugins/       # Installed plugins (lance-vector)
-│   ├── lance-vector-9.2.4-SNAPSHOT.jar
-│   ├── lance-core-1.0.0-beta.2.jar
-│   ├── arrow-*.jar (Arrow libraries)
-│   └── plugin-descriptor.properties
-└── README.asciidoc
-```
+## Error Log (2026-02-10, follow-up)
+| Timestamp | Error | Attempt | Resolution |
+|-----------|-------|---------|------------|
+| 2026-02-10 | `javaRestTest` dependency verification missing checksum for `elasticsearch-distribution-snapshot` artifact | 1 | Added `<trust group=\"elasticsearch-distribution-snapshot\" name=\"elasticsearch\"/>` to `gradle/verification-metadata.xml`. |
+| 2026-02-10 | `CloudIamRealmIT` failed bootstrap with `401 missing authentication credentials` (`_nodes/plugins`) | 1 | Added explicit admin client credentials in `CloudIamRealmIT.restAdminSettings()` using `test_user`. |
+| 2026-02-10 | `CloudIamRealmIT.testRejectsInvalidSignature` expected 401 but request succeeded | 1 | Fixed STS cache key to include signature context; added `testRejectsDifferentSignatureAfterSuccessfulAuthentication`. |
